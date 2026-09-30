@@ -1,4 +1,5 @@
 pandas
 requests
+boto3
 pytest
 tzdata

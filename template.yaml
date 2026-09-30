@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: CHP incident feed poller
+
+Parameters:
+  PandasLayerArn:
+    Type: String
+    Description: AWS SDK for pandas layer (pandas, pyarrow, awswrangler) matching the runtime
+    Default: arn:aws:lambda:us-west-2:336392948345:layer:AWSSDKPandas-Python314:11
+  GlueDatabaseName:
+    Type: String
+    Default: traffic_bronze
+
+Resources:
+  Lake:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain          # keep collected data even if the stack is deleted
+    UpdateReplacePolicy: Retain
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  BronzeDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref GlueDatabaseName
+        Description: Parsed raw data (one table per source file type)
+
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: traffic
+      State: ENABLED
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        BytesScannedCutoffPerQuery: 10737418240   # 10 GB cap per query (~5 cents)
+        ResultConfiguration:
+          OutputLocation: !Sub s3://${Lake}/athena-results/
+
+  ChpPoller:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: chp.handler.main
+      Runtime: python3.14
+      MemorySize: 1024
+      Timeout: 120                  # downloader retries + parsing + Parquet writes
+      Layers:
+        - !Ref PandasLayerArn
+      Environment:
+        Variables:
+          BUCKET: !Ref Lake
+          GLUE_DB: !Ref GlueDatabaseName
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref Lake
+        - Statement:
+            - Effect: Allow
+              Action:
+                - glue:GetDatabase
+                - glue:GetTable
+                - glue:CreateTable
+                - glue:UpdateTable
+                - glue:GetPartition
+                - glue:GetPartitions
+                - glue:CreatePartition
+                - glue:BatchCreatePartition
+                - glue:BatchGetPartition
+              Resource:
+                - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabaseName}
+                - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabaseName}/*
+      Events:
+        EveryMinute:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(1 minute)
+
+Outputs:
+  LakeBucket:
+    Description: S3 bucket holding the data lake
+    Value: !Ref Lake
