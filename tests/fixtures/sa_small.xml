@@ -1,0 +1,133 @@
+<?xml version="1.0" ?>
+<!-- Trimmed excerpt of the live CHP feed (Sep 26 2026), kept small for unit tests. -->
+<State><Center ID = "SAHB">
+<Dispatch ID = "SACC">
+
+		<Log ID = "260926SA0830">
+			<LogTime>"Sep 26 2026  4:15PM"</LogTime>
+			<LogType>"1125-Traffic Hazard"</LogType>
+			<Location>"7024 Flanders Way"</Location>
+			<LocationDesc>"IFO"</LocationDesc>
+			<Area>"North Sac"</Area>
+			<ThomasBrothers>""</ThomasBrothers>
+			<LATLON>"38695693:121346857"</LATLON>
+			<LogDetails>
+		<details>
+			<DetailTime>"Sep 26 2026  4:18PM"</DetailTime>
+			<IncidentDetail>"[6] PTY ADV DID NOT SEE ANYONE WITH VEH"</IncidentDetail>
+		</details></LogDetails></Log>
+</Dispatch>
+</Center>
+
+<Center ID = "GGHB">
+<Dispatch ID = "GGCC">
+
+		<Log ID = "260925GG2816">
+			<LogTime>"Sep 25 2026  9:01PM"</LogTime>
+			<LogType>"SILVER-Missing Elderly"</LogType>
+			<Location>"San Mateo Co"</Location>
+			<LocationDesc>"LS IN MENLO PARK"</LocationDesc>
+			<Area>""</Area>
+			<ThomasBrothers>""</ThomasBrothers>
+			<LATLON>"0:0"</LATLON>
+			<LogDetails><details/></LogDetails></Log>
+</Dispatch>
+<Dispatch ID = "VTCC">
+
+		<Log ID = "260926VT0275">
+			<LogTime>"Sep 26 2026  4:07PM"</LogTime>
+			<LogType>"1125-Traffic Hazard"</LogType>
+			<Location>"2710-2749 Painted Cave Rd"</Location>
+			<LocationDesc>""</LocationDesc>
+			<Area>"VT"</Area>
+			<ThomasBrothers>""</ThomasBrothers>
+			<LATLON>"34506443:119789365"</LATLON>
+			<LogDetails>
+		<details>
+			<DetailTime>"Sep 26 2026  4:08PM"</DetailTime>
+			<IncidentDetail>"[3] 1125 IN LNS"</IncidentDetail>
+		</details>
+		<details>
+			<DetailTime>"Sep 26 2026  4:08PM"</DetailTime>
+			<IncidentDetail>"[2] STUCK IN PARK "</IncidentDetail>
+		</details><units>
+			<UnitTime>"Sep 26 2026  4:13PM"</UnitTime>
+			<UnitDetail>"Unit Assigned"</UnitDetail></units></LogDetails></Log>
+</Dispatch>
+</Center>
+
+<Center ID = "LAHB">
+<Dispatch ID = "LACC">
+
+		<Log ID = "260926LA2139">
+			<LogTime>"Sep 26 2026  4:43PM"</LogTime>
+			<LogType>"1183-Trfc Collision-Unkn Inj"</LogType>
+			<Location>"Sr91 W / Avalon Blvd"</Location>
+			<LocationDesc>"WB 91 AT AVALON"</LocationDesc>
+			<Area>"South LA"</Area>
+			<ThomasBrothers>""</ThomasBrothers>
+			<LATLON>"33873376:118266002"</LATLON>
+			<LogDetails>
+		<details>
+			<DetailTime>"Sep 26 2026  4:43PM"</DetailTime>
+			<IncidentDetail>"[6] VEH IS AT AVALON [Shared]"</IncidentDetail>
+		</details>
+		<details>
+			<DetailTime>"Sep 26 2026  4:43PM"</DetailTime>
+			<IncidentDetail>"[4] FSP NEEDS TO HOOK VEH UP [Shared]"</IncidentDetail>
+		</details>
+		<details>
+			<DetailTime>"Sep 26 2026  4:41PM"</DetailTime>
+			<IncidentDetail>"[1] [1] SOLO TC - SIL TOYT VAN VS THE CD - BLOCKING CD/#1[Shared]"</IncidentDetail>
+		</details><units>
+			<UnitTime>"Sep 26 2026  4:47PM"</UnitTime>
+			<UnitDetail>"Unit Enroute"</UnitDetail></units><units>
+			<UnitTime>"Sep 26 2026  4:47PM"</UnitTime>
+			<UnitDetail>"Unit Assigned"</UnitDetail></units><units>
+			<UnitTime>"Sep 26 2026  4:43PM"</UnitTime>
+			<UnitDetail>"Unit Assigned"</UnitDetail></units></LogDetails></Log>
+
+		<Log ID = "260926LA2056">
+			<LogTime>"Sep 26 2026  4:20PM"</LogTime>
+			<LogType>"1179-Trfc Collision-1141 Enrt"</LogType>
+			<Location>"I5 S / N BUENA VISTA ST"</Location>
+			<LocationDesc>"AT"</LocationDesc>
+			<Area>"Altadena"</Area>
+			<ThomasBrothers>""</ThomasBrothers>
+			<LATLON>"34198931:118337948"</LATLON>
+			<LogDetails>
+		<details>
+			<DetailTime>"Sep 26 2026  4:36PM"</DetailTime>
+			<IncidentDetail>"[18] SIG ALERT ISSUED ON THE BLU [Shared]"</IncidentDetail>
+		</details>
+		<details>
+			<DetailTime>"Sep 26 2026  4:34PM"</DetailTime>
+			<IncidentDetail>"[12] 98-50 HOV AND 1 BLOCKED OFF  / REQ SIG FOR 30 [Shared]"</IncidentDetail>
+		</details>
+		<details>
+			<DetailTime>"Sep 26 2026  4:22PM"</DetailTime>
+			<IncidentDetail>"[22] [Appended, 16:38:23] [3] RP ADVS BLK SD WAS 23103 CUTTING I/O LNS PRIOR"</IncidentDetail>
+		</details>
+		<details>
+			<DetailTime>"Sep 26 2026  4:21PM"</DetailTime>
+			<IncidentDetail>"[1] BLK BMW M3  HIT CD / WENT FROM FAR RIGHT TO FAR LEFT / SB 5 JSO BUENA VISTA"</IncidentDetail>
+		</details><units>
+			<UnitTime>"Sep 26 2026  4:30PM"</UnitTime>
+			<UnitDetail>"Unit At Scene"</UnitDetail></units></LogDetails></Log>
+
+		<Log ID = "260926LA2128">
+			<LogTime>"Sep 26 2026  4:35PM"</LogTime>
+			<LogType>"SIG Alert"</LogType>
+			<Location>"I5 S / N Buena Vista St"</Location>
+			<LocationDesc>"AT"</LocationDesc>
+			<Area>"LA"</Area>
+			<ThomasBrothers>""</ThomasBrothers>
+			<LATLON>"34198931:118337948"</LATLON>
+			<LogDetails>
+		<details>
+			<DetailTime>"Sep 26 2026  4:36PM"</DetailTime>
+			<IncidentDetail>"[1] SB 5 AT BUENA VISTA HOV/#1 LNS BLOCKED OFF FOR APPROX 30 MINS DUE TO L/2056"</IncidentDetail>
+		</details></LogDetails></Log>
+</Dispatch>
+</Center>
+</State>
