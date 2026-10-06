@@ -9,3 +9,5 @@ profile = "traffic"
 capabilities = "CAPABILITY_IAM"
 resolve_s3 = true
 confirm_changeset = true
+# Failure alerts go to this email. Confirm the subscription email AWS sends after deploying.
+parameter_overrides = "AlertEmail=rautatharva85@gmail.com"

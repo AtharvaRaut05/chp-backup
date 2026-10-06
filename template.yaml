@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: CHP incident feed poller
+Description: CHP incident poller + daily PeMS traffic workflow
 
 Parameters:
   PandasLayerArn:
@@ -10,8 +10,35 @@ Parameters:
   GlueDatabaseName:
     Type: String
     Default: traffic_bronze
+  DispatchIds:
+    Type: String
+    Description: CHP dispatch centers to collect (comma-separated). Add centers here to expand coverage.
+    Default: LACC,VTCC,OCCC,INCC,BCCC,BSCC,ICCC,ECCC
+  AlertEmail:
+    Type: String
+    Description: Email for failure alerts (confirm the subscription email AWS sends). Blank = no alerts.
+    Default: ""
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Globals:
+  Function:
+    CodeUri: src/
+    Runtime: python3.14
+    Layers:
+      - !Ref PandasLayerArn
+    Environment:
+      Variables:
+        BUCKET: !Ref Lake
+        GLUE_DB: !Ref GlueDatabaseName
+        STATE_TABLE: !Ref ChpState
+        PAIRING_TABLE: !Ref PemsPairing
+        ATHENA_WORKGROUP: !Ref AthenaWorkGroup
+        DISPATCH_IDS: !Ref DispatchIds
 
 Resources:
+  # ---------- storage ----------
   Lake:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain          # keep collected data even if the stack is deleted
@@ -31,6 +58,44 @@ Resources:
         Name: !Ref GlueDatabaseName
         Description: Parsed raw data (one table per source file type)
 
+  ChpState:
+    Type: AWS::Serverless::SimpleTable   # on-demand DynamoDB; holds the open-incident state
+    Properties:
+      PrimaryKey:
+        Name: pk
+        Type: String
+
+  PemsPairing:
+    Type: AWS::Serverless::SimpleTable   # on-demand DynamoDB; pairing status per district-day
+    Properties:
+      PrimaryKey:
+        Name: pk
+        Type: String
+
+  GlueAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy        # read/write tables in the bronze Glue database only
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - glue:GetDatabase
+              - glue:GetTable
+              - glue:GetTables
+              - glue:CreateTable
+              - glue:UpdateTable
+              - glue:GetPartition
+              - glue:GetPartitions
+              - glue:CreatePartition
+              - glue:BatchCreatePartition
+              - glue:BatchGetPartition
+              - glue:BatchDeletePartition
+            Resource:
+              - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
+              - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabaseName}
+              - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabaseName}/*
+
   AthenaWorkGroup:
     Type: AWS::Athena::WorkGroup
     Properties:
@@ -42,46 +107,167 @@ Resources:
         ResultConfiguration:
           OutputLocation: !Sub s3://${Lake}/athena-results/
 
+  # ---------- CHP poller (every minute) ----------
   ChpPoller:
     Type: AWS::Serverless::Function
     Properties:
-      CodeUri: src/
       Handler: chp.handler.main
-      Runtime: python3.14
       MemorySize: 1024
       Timeout: 120                  # downloader retries + parsing + Parquet writes
-      Layers:
-        - !Ref PandasLayerArn
-      Environment:
-        Variables:
-          BUCKET: !Ref Lake
-          GLUE_DB: !Ref GlueDatabaseName
       Policies:
-        - S3CrudPolicy:
-            BucketName: !Ref Lake
-        - Statement:
-            - Effect: Allow
-              Action:
-                - glue:GetDatabase
-                - glue:GetTable
-                - glue:CreateTable
-                - glue:UpdateTable
-                - glue:GetPartition
-                - glue:GetPartitions
-                - glue:CreatePartition
-                - glue:BatchCreatePartition
-                - glue:BatchGetPartition
-              Resource:
-                - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
-                - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabaseName}
-                - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabaseName}/*
+        - S3CrudPolicy: { BucketName: !Ref Lake }
+        - DynamoDBCrudPolicy: { TableName: !Ref ChpState }
+        - !Ref GlueAccessPolicy
       Events:
         EveryMinute:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: rate(1 minute)
 
+  # ---------- daily PeMS workflow ----------
+  PemsPlanner:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: pems.orchestrate.plan
+      MemorySize: 512
+      Timeout: 300
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref Lake }
+        - DynamoDBCrudPolicy: { TableName: !Ref PemsPairing }
+        - AthenaQueryPolicy: { WorkGroupName: !Ref AthenaWorkGroup }
+        - !Ref GlueAccessPolicy
+
+  PemsFetcher:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: pems.handler.main
+      MemorySize: 2048
+      Timeout: 900                  # one district-day: ~15 MB download + parse + write
+      EphemeralStorage:
+        Size: 2048
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref Lake }
+        - DynamoDBCrudPolicy: { TableName: !Ref PemsPairing }
+        - SSMParameterReadPolicy: { ParameterName: traffic/pems/* }
+        - !Ref GlueAccessPolicy
+
+  PemsReporter:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: pems.orchestrate.report
+      MemorySize: 512
+      Timeout: 120
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref Lake }
+        - DynamoDBCrudPolicy: { TableName: !Ref PemsPairing }
+        - !Ref GlueAccessPolicy
+
+  DailyTrafficWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Policies:
+        - LambdaInvokePolicy: { FunctionName: !Ref PemsPlanner }
+        - LambdaInvokePolicy: { FunctionName: !Ref PemsFetcher }
+        - LambdaInvokePolicy: { FunctionName: !Ref PemsReporter }
+      Events:
+        Daily:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: cron(0 10 * * ? *)
+            ScheduleExpressionTimezone: America/Los_Angeles
+      DefinitionSubstitutions:
+        PlanFn: !GetAtt PemsPlanner.Arn
+        FetchFn: !GetAtt PemsFetcher.Arn
+        ReportFn: !GetAtt PemsReporter.Arn
+      Definition:
+        Comment: Pull PeMS traffic data only for district-days that had CHP incidents
+        StartAt: Plan
+        States:
+          Plan:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters: { FunctionName: "${PlanFn}", Payload.$: "$" }
+            OutputPath: $.Payload
+            Retry:
+              - { ErrorEquals: [States.ALL], IntervalSeconds: 60, MaxAttempts: 2, BackoffRate: 2 }
+            Next: FetchEach
+          FetchEach:
+            Type: Map
+            ItemsPath: $.todo
+            MaxConcurrency: 1       # one download at a time, to be polite to PeMS
+            ItemProcessor:
+              ProcessorConfig: { Mode: INLINE }
+              StartAt: Fetch
+              States:
+                Fetch:
+                  Type: Task
+                  Resource: arn:aws:states:::lambda:invoke
+                  Parameters: { FunctionName: "${FetchFn}", Payload.$: "$" }
+                  OutputPath: $.Payload
+                  Retry:
+                    - { ErrorEquals: [States.ALL], IntervalSeconds: 120, MaxAttempts: 3, BackoffRate: 2 }
+                  Catch:
+                    - { ErrorEquals: [States.ALL], ResultPath: $.error, Next: MarkFailed }
+                  End: true
+                MarkFailed:
+                  Type: Pass
+                  Parameters: { district.$: $.district, date.$: $.date, status: failed, error.$: $.error }
+                  End: true
+            ResultPath: $.results
+            Next: Report
+          Report:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke
+            Parameters: { FunctionName: "${ReportFn}", Payload.$: "$" }
+            OutputPath: $.Payload
+            End: true
+
+  # ---------- alerts ----------
+  AlertTopic:
+    Type: AWS::SNS::Topic
+
+  AlertSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref AlertTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  ChpPollerDownAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: CHP poller failing repeatedly (feed down or code error) - incidents may be missed
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref ChpPoller }]
+      Statistic: Sum
+      Period: 600
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  WorkflowFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Daily PeMS workflow failed - traffic data missing for some district-days
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions: [{ Name: StateMachineArn, Value: !Ref DailyTrafficWorkflow }]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
 Outputs:
   LakeBucket:
     Description: S3 bucket holding the data lake
     Value: !Ref Lake
+  WorkflowArn:
+    Description: Daily PeMS workflow (Step Functions)
+    Value: !Ref DailyTrafficWorkflow

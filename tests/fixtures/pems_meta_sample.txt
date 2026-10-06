@@ -1,0 +1,3 @@
+ID	Fwy	Dir	District	County	City	State_PM	Abs_PM	Latitude	Longitude	Length	Type	Lanes	Name	User_ID_1	User_ID_2	User_ID_3	User_ID_4
+715898	5	N	7	37	40032	.68	117.313	33.880069	-118.021261	.828	ML	3	PHOEBE	2029			
+715900	5	S	7	37	40032	1.06	117.63	33.882892	-118.026822		OR	1	VALLEY VIEW	3255			
