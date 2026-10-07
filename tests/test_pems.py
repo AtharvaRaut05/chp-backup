@@ -14,9 +14,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 # --- parsing (fixtures are real rows from the Clearinghouse) ----------------
 
-def test_station_file_keeps_mainline_and_converts_to_utc():
+def test_station_file_keeps_freeway_sensor_types_and_converts_to_utc():
     df = parse_station_5min(FIXTURES / "pems_station_5min_sample.txt.gz", 7, date(2026, 9, 29))
-    assert list(df["station_id"]) == [715898]  # the two on-ramp (OR) rows are dropped
+    assert list(zip(df["station_id"], df["lane_type"])) == [(715898, "ML"), (715900, "OR"), (715901, "OR")]
     row = df.iloc[0]
     assert row["ts"] == datetime(2026, 9, 29, 7, 0, tzinfo=timezone.utc)  # midnight PDT
     assert (row["total_flow"], row["avg_speed"], row["pct_observed"]) == (202, 70.4, 0)

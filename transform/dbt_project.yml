@@ -1,0 +1,37 @@
+name: traffic
+version: "0.1.0"
+profile: traffic
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+
+vars:
+  # Which sensors belong to an incident (see int_incident_stations)
+  upstream_miles: 5          # "queue" zone: where a backup builds, upstream of the incident
+  approach_miles: 10         # "approach" zone: 5-10 mi upstream, traffic about to arrive
+  downstream_miles: 0.3      # tolerance so the sensor right at the incident still counts
+  max_match_km: 1.0          # nearest mainline sensor must be this close or the incident is left out
+  min_pct_observed: 50       # below this, PeMS imputed the reading instead of measuring it
+  min_healthy_share: 0.8     # a sensor counts on a given day only if this share of its readings were measured
+  # Time windows around CHP's log time (see int_incident_traffic)
+  log_lag_minutes: 5         # CHP logs a crash a few minutes after it happens
+  precrash_minutes: 30       # pre-crash baseline window, ending log_lag_minutes before the log time
+  series_before_minutes: 60  # traffic history kept before the log time
+  series_after_minutes: 180  # traffic kept after the log time
+  # Backup label (see fct_incident_backup)
+  slow_ratio: 0.6            # a sensor is backed up when speed < this x expected speed
+  onset_minutes: 30          # a backup must start within this many minutes of the log time
+
+models:
+  traffic:
+    +schema: silver
+    staging:
+      +materialized: table
+    intermediate:
+      +materialized: table
+    marts:
+      +materialized: table
+
+seeds:
+  traffic:
+    +schema: silver

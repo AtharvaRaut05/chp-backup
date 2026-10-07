@@ -1,7 +1,8 @@
 """Parse PeMS Clearinghouse files into typed DataFrames.
 
 station_5min: gzip CSV with no header. 12 summary columns, then 8 repeating per-lane groups
-(52 columns total). Timestamps are Pacific local time. Only mainline (ML) rows are kept.
+(52 columns total). Timestamps are Pacific local time. Freeway sensor types are kept
+(mainline, HOV, on/off-ramps, freeway-to-freeway connectors, collector lanes); others dropped.
 meta: tab-separated text with a header row, one row per station.
 """
 
@@ -14,6 +15,10 @@ import pyarrow as pa
 import pyarrow.csv as pv
 
 PACIFIC = ZoneInfo("America/Los_Angeles")
+
+# ML mainline, HV HOV lane, OR on-ramp, FR off-ramp, FF freeway-to-freeway connector,
+# CD collector/distributor. Ramps and connectors measure traffic merging in or leaving.
+KEEP_LANE_TYPES = ("ML", "HV", "OR", "FR", "FF", "CD")
 
 SUMMARY_COLUMNS = [
     "ts_local", "station_id", "district", "freeway", "direction", "lane_type",
@@ -56,7 +61,7 @@ def parse_station_5min(path: Path, district: int, day: date) -> pd.DataFrame:
         ),
     )
     df = table.to_pandas()
-    df = df[df["lane_type"] == "ML"].drop(columns=["lane_type", "district"])
+    df = df[df["lane_type"].isin(KEEP_LANE_TYPES)].drop(columns=["district"])
     # The repeated 1 AM hour at the November DST change is ambiguous in local time; drop it.
     df["ts"] = df.pop("ts_local").dt.tz_localize(PACIFIC, ambiguous="NaT", nonexistent="NaT").dt.tz_convert("UTC")
     df = df.dropna(subset=["ts"])
@@ -64,7 +69,7 @@ def parse_station_5min(path: Path, district: int, day: date) -> pd.DataFrame:
     df["dt"] = day.isoformat()
     return df.astype({
         "ts": "datetime64[ns, UTC]", "station_id": "int64", "freeway": "Int64", "direction": "string",
-        "samples": "Int64", "district": "string", "dt": "string",
+        "lane_type": "string", "samples": "Int64", "district": "string", "dt": "string",
     }).reset_index(drop=True)
 
 

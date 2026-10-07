@@ -1,0 +1,21 @@
+version: 2
+
+sources:
+  - name: bronze
+    schema: traffic_bronze
+    description: Tables written by the ingestion Lambdas (append-only, one row per poll/file).
+    tables:
+      - name: chp_incidents
+        description: One row per incident version (written when an incident is new or changed).
+      - name: chp_details
+        description: Dispatcher notes for each incident version.
+      - name: chp_units
+        description: Unit events (assigned, enroute, at scene, cleared) for each incident version.
+      - name: chp_closures
+        description: One row per incident that dropped out of the feed (closed).
+      - name: pems_station_5min
+        description: 5-minute mainline sensor readings, partitioned by district and day.
+      - name: pems_stations
+        description: Sensor metadata (location, freeway, postmile), one partition per metadata file.
+      - name: pems_pairing
+        description: Status log of whether each district-day has PeMS data.

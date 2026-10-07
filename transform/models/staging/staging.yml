@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: stg_chp_incidents
+    description: One row per CHP incident (latest version), with location, closure, and pairing status.
+    columns:
+      - name: log_id
+        tests: [unique, not_null]
+      - name: log_time
+        tests: [not_null]
+      - name: pairing_status
+        description: "'paired' means traffic data exists for this incident's district-day."
+        tests:
+          - accepted_values:
+              arguments:
+                values: [paired, pending, no_incidents, unpaired, none]
+      - name: direction
+        tests:
+          - accepted_values:
+              arguments:
+                values: [N, S, E, W]
+
+  - name: stg_chp_notes
+    description: Every dispatcher note per incident, with the time the poller first saw it.
+    columns:
+      - name: log_id
+        tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_chp_incidents'), field: log_id}}
+
+  - name: stg_chp_units
+    description: Unit events from each incident's latest version.
+
+  - name: stg_pems_pairing
+    description: Current pairing status per district-day.
+    columns:
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: [paired, pending, no_incidents, unpaired]
+
+  - name: stg_pems_stations
+    description: Latest metadata for each mainline sensor station.
+    columns:
+      - name: station_id
+        tests: [unique, not_null]
+      - name: direction
+        tests:
+          - accepted_values:
+              arguments:
+                values: [N, S, E, W]
+
+  - name: stg_pems_5min
+    description: 5-minute mainline readings with an is_observed quality flag (view).

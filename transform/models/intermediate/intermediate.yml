@@ -1,0 +1,187 @@
+version: 2
+
+models:
+  - name: int_note_features
+    description: Structured features extracted from each dispatcher note.
+    columns:
+      - name: log_id
+        tests: [not_null]
+      - name: lanes_blocked
+        tests:
+          - accepted_values:
+              arguments:
+                values: [1, 2, 3, 4, 5, 6, 7, 8]
+                quote: false
+
+  - name: int_incident_stations
+    description: Sensors around each freeway incident with their role (queue, approach, merge, exit).
+    columns:
+      - name: log_id
+        tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_chp_incidents'), field: log_id}}
+      - name: station_id
+        tests:
+          - not_null
+          - relationships: {arguments: {to: ref('stg_pems_stations'), field: station_id}}
+      - name: role
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [queue, approach, merge, exit]
+
+  - name: int_station_day_health
+    description: Whether each sensor was actually measuring (not imputed) on each day.
+    columns:
+      - name: share_measured
+        tests: [not_null]
+
+  - name: int_station_profile
+    description: Typical speed and flow per mainline sensor, weekday/weekend, per 5-minute slot.
+
+  - name: int_incident_traffic
+    description: 5-minute traffic around each paired incident with the pre-crash-adjusted expected speed.
+    columns:
+      - name: baseline_method
+        tests:
+          - accepted_values:
+              arguments:
+                values: [precrash_adjusted, precrash_only]
+
+  - name: int_incident_precrash
+    description: Traffic conditions before each incident (one row per incident), safe to use as model inputs.
+    columns:
+      - name: log_id
+        tests: [unique, not_null]
+
+unit_tests:
+  # ---- sensor roles: a northbound crash looks SOUTH (lower postmile) for its queue ----
+  - name: incident_stations_upstream_direction
+    model: int_incident_stations
+    given:
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: n, freeway: 5, direction: N, lat: 34.0, lon: -118.0, is_traffic: true}
+          - {log_id: s, freeway: 5, direction: S, lat: 34.5, lon: -118.5, is_traffic: true}
+          - {log_id: far, freeway: 5, direction: N, lat: 40.0, lon: -120.0, is_traffic: true}
+      - input: ref('stg_pems_stations')
+        rows:
+          - {station_id: 1, type: ML, freeway: 5, direction: N, abs_pm: 100.0, lat: 34.0, lon: -118.0}
+          - {station_id: 2, type: ML, freeway: 5, direction: N, abs_pm: 97.0, lat: 33.96, lon: -118.0}
+          - {station_id: 3, type: ML, freeway: 5, direction: N, abs_pm: 101.0, lat: 34.01, lon: -118.0}
+          - {station_id: 4, type: ML, freeway: 5, direction: N, abs_pm: 93.0, lat: 33.9, lon: -118.0}
+          - {station_id: 5, type: ML, freeway: 5, direction: N, abs_pm: 88.0, lat: 33.8, lon: -118.0}
+          - {station_id: 6, type: OR, freeway: 5, direction: N, abs_pm: 98.0, lat: 33.97, lon: -118.0}
+          - {station_id: 7, type: FF, freeway: 5, direction: N, abs_pm: 96.0, lat: 33.95, lon: -118.0}
+          - {station_id: 8, type: FR, freeway: 5, direction: N, abs_pm: 99.0, lat: 33.98, lon: -118.0}
+          - {station_id: 9, type: ML, freeway: 5, direction: S, abs_pm: 97.0, lat: 33.96, lon: -118.0}
+          - {station_id: 10, type: ML, freeway: 5, direction: S, abs_pm: 200.0, lat: 34.5, lon: -118.5}
+          - {station_id: 11, type: ML, freeway: 5, direction: S, abs_pm: 203.0, lat: 34.54, lon: -118.5}
+          - {station_id: 12, type: ML, freeway: 5, direction: S, abs_pm: 197.0, lat: 34.46, lon: -118.5}
+    expect:
+      rows:
+        # northbound: queue/approach/merge/exit are all at LOWER postmiles; pm 101 (downstream) and 88 (12 mi) excluded
+        - {log_id: n, station_id: 1, role: queue, miles_upstream: 0.0}
+        - {log_id: n, station_id: 2, role: queue, miles_upstream: 3.0}
+        - {log_id: n, station_id: 4, role: approach, miles_upstream: 7.0}
+        - {log_id: n, station_id: 6, role: merge, miles_upstream: 2.0}
+        - {log_id: n, station_id: 7, role: merge, miles_upstream: 4.0}
+        - {log_id: n, station_id: 8, role: exit, miles_upstream: 1.0}
+        # southbound: upstream is a HIGHER postmile; pm 197 is downstream and excluded
+        - {log_id: s, station_id: 10, role: queue, miles_upstream: 0.0}
+        - {log_id: s, station_id: 11, role: queue, miles_upstream: 3.0}
+        # "far" has no sensor within max_match_km, so it's left out entirely
+
+  # ---- baseline: expected speed = typical speed x (pre-crash actual / pre-crash typical) ----
+  - name: incident_traffic_precrash_adjusted_baseline
+    model: int_incident_traffic
+    given:
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: x, log_time: "2026-10-01 17:00:00", pairing_status: paired}
+      - input: ref('int_incident_stations')
+        rows:
+          - {log_id: x, station_id: 1, station_type: ML, role: queue, role_rank: 1, miles_upstream: 0.0}
+          - {log_id: x, station_id: 2, station_type: ML, role: queue, role_rank: 2, miles_upstream: 1.0}
+      - input: ref('stg_pems_5min')
+        rows:
+          # 17:00 UTC = 10:00 AM PDT on a Thursday. Pre-crash window: 16:25-16:55 UTC.
+          # Station 2 is a dead sensor that day, so its readings must be dropped.
+          - {station_id: 1, dt: "2026-10-01", ts: "2026-10-01 16:30:00", avg_speed: 40.0, is_observed: true}
+          - {station_id: 1, dt: "2026-10-01", ts: "2026-10-01 16:50:00", avg_speed: 40.0, is_observed: true}
+          - {station_id: 1, dt: "2026-10-01", ts: "2026-10-01 17:10:00", avg_speed: 20.0, is_observed: true}
+          - {station_id: 2, dt: "2026-10-01", ts: "2026-10-01 17:10:00", avg_speed: 65.0, is_observed: false}
+      - input: ref('int_station_day_health')
+        rows:
+          - {station_id: 1, dt: "2026-10-01", is_healthy: true}
+          - {station_id: 2, dt: "2026-10-01", is_healthy: false}
+      - input: ref('int_station_profile')
+        rows:
+          # slots (Pacific): 9:30 -> 114, 9:50 -> 118, 10:10 -> 122
+          - {station_id: 1, day_type: weekday, slot: 114, typical_speed: 50.0}
+          - {station_id: 1, day_type: weekday, slot: 118, typical_speed: 50.0}
+          - {station_id: 1, day_type: weekday, slot: 122, typical_speed: 60.0}
+    expect:
+      rows:
+        # pre-crash: running at 40 where 50 is typical -> ratio 0.8; at +10 min typical is 60 -> expected 48
+        - {log_id: x, minutes_from_log: -30, avg_speed: 40.0, expected_speed: 40.0, baseline_method: precrash_adjusted}
+        - {log_id: x, minutes_from_log: -10, avg_speed: 40.0, expected_speed: 40.0, baseline_method: precrash_adjusted}
+        - {log_id: x, minutes_from_log: 10, avg_speed: 20.0, expected_speed: 48.0, baseline_method: precrash_adjusted}
+
+  # ---- note features (real CHP notes) ----
+  - name: note_features_lane_blocking
+    model: int_note_features
+    given:
+      - input: ref('stg_chp_notes')
+        rows:
+          - {log_id: a, detail_seq: 1, detail_text: "B25-580 BLKG LN 2,3,4"}
+          - {log_id: a, detail_seq: 2, detail_text: "PER CCTV - LANES 2-4 ARE BLOCKED - CMS ACTIVATED"}
+          - {log_id: a, detail_seq: 3, detail_text: "LADDER BLKG #3/4 LN"}
+          - {log_id: a, detail_seq: 4, detail_text: "B74-030 FIRE BLOCKING 3 LEFT LNS"}
+          - {log_id: a, detail_seq: 5, detail_text: "1125 IN #1 LN"}
+          - {log_id: a, detail_seq: 6, detail_text: "B56-010B 97 EB 101 JEO TOPANGA CYN BLKG SLOW LN"}
+          - {log_id: a, detail_seq: 7, detail_text: "VEH BLKG BOTH LNS ON MIDDLE OF BRDG"}
+          - {log_id: a, detail_seq: 8, detail_text: "B74-021 HOLDING ALL LNS"}
+          - {log_id: a, detail_seq: 9, detail_text: "24-P75 ALL LN OPEN"}
+          - {log_id: a, detail_seq: 10, detail_text: "NEG BLKG"}
+          - {log_id: a, detail_seq: 11, detail_text: "LE - REF LN 33 - 1039 ACTION TOW"}
+          - {log_id: a, detail_seq: 12, detail_text: "WHI MITSU SD VS DEER - PARTIALLY BLK'G THE RDWY"}
+    expect:
+      rows:
+        - {log_id: a, detail_seq: 1, is_blocking: true, all_lanes: false, lanes_open: false, lanes_blocked: 3}
+        - {log_id: a, detail_seq: 2, is_blocking: true, all_lanes: false, lanes_open: false, lanes_blocked: 3}
+        - {log_id: a, detail_seq: 3, is_blocking: true, all_lanes: false, lanes_open: false, lanes_blocked: 2}
+        - {log_id: a, detail_seq: 4, is_blocking: true, all_lanes: false, lanes_open: false, lanes_blocked: 3}
+        - {log_id: a, detail_seq: 5, is_blocking: true, all_lanes: false, lanes_open: false, lanes_blocked: 1}
+        - {log_id: a, detail_seq: 6, is_blocking: true, all_lanes: false, lanes_open: false, lanes_blocked: 1}
+        - {log_id: a, detail_seq: 7, is_blocking: true, all_lanes: true, lanes_open: false, lanes_blocked: null}
+        - {log_id: a, detail_seq: 8, is_blocking: true, all_lanes: true, lanes_open: false, lanes_blocked: null}
+        - {log_id: a, detail_seq: 9, is_blocking: false, all_lanes: false, lanes_open: true, lanes_blocked: null}
+        - {log_id: a, detail_seq: 10, is_blocking: false, all_lanes: false, lanes_open: false, lanes_blocked: null}
+        - {log_id: a, detail_seq: 11, is_blocking: false, all_lanes: false, lanes_open: false, lanes_blocked: null}
+        - {log_id: a, detail_seq: 12, is_blocking: true, all_lanes: false, lanes_open: false, lanes_blocked: null}
+
+  - name: note_features_vehicles_and_responders
+    model: int_note_features
+    given:
+      - input: ref('stg_chp_notes')
+        rows:
+          - {log_id: b, detail_seq: 1, detail_text: "BLK TESLA MODEL Y VS GRY TOYT COA 4D VS BLK HB 4D (20002)"}
+          - {log_id: b, detail_seq: 2, detail_text: "4-5 VEH TC"}
+          - {log_id: b, detail_seq: 3, detail_text: "77-12 VEH 1124 // 1126"}
+          - {log_id: b, detail_seq: 4, detail_text: "SOLO ROLL OVER // APPEARS 1182 // 1185 FOR VEH"}
+          - {log_id: b, detail_seq: 5, detail_text: "VEH VS POLE"}
+          - {log_id: b, detail_seq: 6, detail_text: "WHI FORD FUS VS SEMI // NEG 1125 // NEG MEDICAL ATTENTION NEEDED"}
+          - {log_id: b, detail_seq: 7, detail_text: "SIG ALERT ISSUED ON THE BLU"}
+          - {log_id: b, detail_seq: 8, detail_text: "[Notification] [CHP]-Problem changed from 1183-Trfc Collision-Unkn Inj to 1182-Trfc Collision-No Inj by CHP"}
+    expect:
+      rows:
+        - {log_id: b, detail_seq: 1, vehicles: 3, overturned: false, tow: false, ambulance: false, sigalert: false, type_changed_to: null}
+        - {log_id: b, detail_seq: 2, vehicles: 4, overturned: false, tow: false, ambulance: false, sigalert: false, type_changed_to: null}
+        - {log_id: b, detail_seq: 3, vehicles: null, overturned: false, tow: false, ambulance: false, sigalert: false, type_changed_to: null}
+        - {log_id: b, detail_seq: 4, vehicles: 1, overturned: true, tow: true, ambulance: false, sigalert: false, type_changed_to: null}
+        - {log_id: b, detail_seq: 5, vehicles: 1, overturned: false, tow: false, ambulance: false, sigalert: false, type_changed_to: null}
+        - {log_id: b, detail_seq: 6, vehicles: 2, overturned: false, tow: false, ambulance: false, sigalert: false, type_changed_to: null}
+        - {log_id: b, detail_seq: 7, vehicles: null, overturned: false, tow: false, ambulance: false, sigalert: true, type_changed_to: null}
+        - {log_id: b, detail_seq: 8, vehicles: null, overturned: false, tow: false, ambulance: false, sigalert: false, type_changed_to: "1182"}

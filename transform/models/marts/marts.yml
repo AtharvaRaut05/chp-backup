@@ -1,0 +1,97 @@
+version: 2
+
+models:
+  - name: fct_incident_backup
+    description: >
+      The label. One row per measurable incident: whether it caused a backup (queue-zone speed
+      below slow_ratio x expected), when it started and ended relative to CHP's log time, how long
+      it lasted, whether it was still going when the data window ended (censored), how far
+      upstream it reached, and its worst speed ratio.
+    columns:
+      - name: log_id
+        tests:
+          - unique
+          - not_null
+          - relationships: {arguments: {to: ref('stg_chp_incidents'), field: log_id}}
+      - name: backup_minutes
+        tests: [not_null]
+
+unit_tests:
+  - name: backup_label_start_recovery_and_censoring
+    model: fct_incident_backup
+    description: >
+      a: backed up 0-10 min, recovers at 15 for 15 straight minutes (reaches 4 mi back).
+      b: never slowed. c: still backed up when data ends -> censored.
+      e: a 10-minute recovery doesn't count; real recovery at 25.
+      f: slowdown at 40 min is after the 30-min onset window -> not attributed.
+      d: no healthy sensor before the crash -> not labeled.
+    given:
+      - input: ref('int_incident_traffic')
+        rows:
+          - {log_id: a, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.0, minutes_from_log: 0, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.0, minutes_from_log: 5, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.0, minutes_from_log: 10, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.0, minutes_from_log: 15, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.0, minutes_from_log: 20, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.0, minutes_from_log: 25, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.0, minutes_from_log: 30, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 2, miles_upstream: 4.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 2, miles_upstream: 4.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 2, miles_upstream: 4.0, minutes_from_log: 5, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 2, miles_upstream: 4.0, minutes_from_log: 10, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 2, miles_upstream: 4.0, minutes_from_log: 15, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 2, miles_upstream: 4.0, minutes_from_log: 20, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 2, miles_upstream: 4.0, minutes_from_log: 25, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, station_id: 2, miles_upstream: 4.0, minutes_from_log: 30, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 10, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: 5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: 10, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: 15, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: 20, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: 25, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 0, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 5, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 10, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 15, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 20, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 25, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 30, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 35, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 40, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 10, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 15, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 20, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 25, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 30, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 35, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 40, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 45, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: d, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: -5, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: d, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 0, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: d, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 5, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: d, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 10, avg_speed: 30.0, expected_speed: 60.0}
+      - input: ref('int_incident_precrash')
+        rows:
+          - {log_id: a, is_measurable: true}
+          - {log_id: b, is_measurable: true}
+          - {log_id: c, is_measurable: true}
+          - {log_id: e, is_measurable: true}
+          - {log_id: f, is_measurable: true}
+          - {log_id: d, is_measurable: false}
+    expect:
+      rows:
+        - {log_id: a, has_backup: true, backup_start_min: 0, backup_end_min: 15, backup_minutes: 15, is_censored: false, max_extent_miles: 4.0}
+        - {log_id: b, has_backup: false, backup_start_min: null, backup_end_min: null, backup_minutes: 0, is_censored: false, max_extent_miles: null}
+        - {log_id: c, has_backup: true, backup_start_min: 10, backup_end_min: null, backup_minutes: 20, is_censored: true, max_extent_miles: 3.0}
+        - {log_id: e, has_backup: true, backup_start_min: 0, backup_end_min: 25, backup_minutes: 25, is_censored: false, max_extent_miles: 1.5}
+        - {log_id: f, has_backup: false, backup_start_min: null, backup_end_min: null, backup_minutes: 0, is_censored: false, max_extent_miles: null}

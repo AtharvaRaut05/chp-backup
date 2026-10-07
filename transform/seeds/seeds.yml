@@ -1,0 +1,6 @@
+version: 2
+seeds:
+  - name: dispatch_districts
+    description: Caltrans district each CHP dispatch center mostly covers (matches src/common/config.py).
+    config:
+      column_types: {dispatch_id: varchar, district: varchar}

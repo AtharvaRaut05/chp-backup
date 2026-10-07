@@ -2,3 +2,7 @@
 __pycache__/
 .pytest_cache/
 .aws-sam/
+.venv-dbt/
+transform/target/
+transform/logs/
+transform/.user.yml
