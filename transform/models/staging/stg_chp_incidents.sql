@@ -26,9 +26,13 @@ latest as (
 ),
 
 closures as (
-    select log_id, max(last_seen) as last_seen_open, max(closed_detected_at) as closed_detected_at
-    from {{ source('bronze', 'chp_closures') }}
-    group by log_id
+    -- A closure only counts if the incident never showed up again afterwards (a feed outage
+    -- or an overlapping poll can record a closure for an incident that's still open).
+    select c.log_id, max(c.last_seen) as last_seen_open, max(c.closed_detected_at) as closed_detected_at
+    from {{ source('bronze', 'chp_closures') }} c
+    join latest l on l.log_id = c.log_id
+    where c.closed_detected_at > l.last_changed_at
+    group by c.log_id
 ),
 
 located as (
@@ -44,7 +48,7 @@ located as (
             regexp_extract(upper(location), '\b(?:I|SR|US)[0-9]{1,3} ([NSEW])\b', 1),
             regexp_extract(upper(location_desc), '\b(?:I|SR|US)[0-9]{1,3} ([NSEW])\b', 1),
             regexp_extract(upper(location_desc), '\b([NSEW])B [0-9]{1,3}\b', 1)
-        ) as direction
+        ) as direction_txt
     from latest l
 ),
 
@@ -68,7 +72,13 @@ select
     i.lat,
     i.lon,
     cast(i.freeway_txt as integer) as freeway,
-    i.direction,
+    -- PeMS labels US-101 north/south everywhere; CHP sometimes says east/west where 101 runs
+    -- east-west (San Fernando Valley, Ventura). Northbound 101 heads west there.
+    case
+        when i.freeway_txt = '101' and i.direction_txt = 'E' then 'S'
+        when i.freeway_txt = '101' and i.direction_txt = 'W' then 'N'
+        else i.direction_txt
+    end as direction,
     i.first_polled_at,
     i.last_changed_at,
     i.n_versions,

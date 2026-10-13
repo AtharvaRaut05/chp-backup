@@ -88,3 +88,25 @@ def test_closure_completes_even_if_feed_stops_changing(env, monkeypatch):
     assert list(written["chp_closures"]["log_id"]) == ["260926LA2139"]
     assert written["chp_incidents"].empty
     assert handler.main({}, None)["status"] == "unchanged"
+
+
+def test_error_page_does_not_close_incidents(env, monkeypatch):
+    from chp.parse import BadFeed
+    _, written, saved = env
+    handler.main({}, None)
+    monkeypatch.setattr(handler, "get_feed", lambda url: b"<State></State>")
+    for _ in range(3):
+        with pytest.raises(BadFeed):
+            handler.main({}, None)
+    assert saved["state"].version == 1  # state untouched, nothing counted as missing
+    assert all(int(v["missed"]) == 0 for v in saved["state"].incidents.values())
+
+
+def test_overlapping_run_that_saves_second_is_superseded(env, monkeypatch):
+    from botocore.exceptions import ClientError
+
+    def conflict(name, state):
+        raise ClientError({"Error": {"Code": "ConditionalCheckFailedException"}}, "PutItem")
+
+    monkeypatch.setattr(handler, "save_state", conflict)
+    assert handler.main({}, None)["status"] == "superseded"

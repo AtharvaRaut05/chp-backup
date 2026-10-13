@@ -18,9 +18,13 @@ vars:
   precrash_minutes: 30       # pre-crash baseline window, ending log_lag_minutes before the log time
   series_before_minutes: 60  # traffic history kept before the log time
   series_after_minutes: 180  # traffic kept after the log time
+  min_profile_days: 3        # other days needed to trust a sensor's "typical" traffic for a time slot
   # Backup label (see fct_incident_backup)
   slow_ratio: 0.6            # a sensor is backed up when speed < this x expected speed
   onset_minutes: 30          # a backup must start within this many minutes of the log time
+  max_gap_minutes: 15        # longest hole in the queue readings we look past; longer = we lost sight of it
+  # Training set (see fct_training_landmarks)
+  landmarks: [10, 20, 30]    # minutes after the log time at which a prediction is made
 
 models:
   traffic:

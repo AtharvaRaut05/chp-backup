@@ -6,3 +6,5 @@ __pycache__/
 transform/target/
 transform/logs/
 transform/.user.yml
+ml/data/
+ml/output/

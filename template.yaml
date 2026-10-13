@@ -114,6 +114,9 @@ Resources:
       Handler: chp.handler.main
       MemorySize: 1024
       Timeout: 120                  # downloader retries + parsing + Parquet writes
+      EventInvokeConfig:            # a failed poll is not retried; the next minute's poll replaces it
+        MaximumRetryAttempts: 0
+        MaximumEventAgeInSeconds: 60
       Policies:
         - S3CrudPolicy: { BucketName: !Ref Lake }
         - DynamoDBCrudPolicy: { TableName: !Ref ChpState }
@@ -123,6 +126,9 @@ Resources:
           Type: ScheduleV2
           Properties:
             ScheduleExpression: rate(1 minute)
+            RetryPolicy:
+              MaximumRetryAttempts: 0
+              MaximumEventAgeInSeconds: 60
 
   # ---------- daily PeMS workflow ----------
   PemsPlanner:
@@ -247,6 +253,21 @@ Resources:
       Threshold: 5
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  ChpPollerStoppedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: CHP poller has stopped running (schedule disabled or broken) - no incidents are being collected
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions: [{ Name: FunctionName, Value: !Ref ChpPoller }]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 30                 # expect ~60 an hour
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
       AlarmActions: [!Ref AlertTopic]
 
   WorkflowFailedAlarm:

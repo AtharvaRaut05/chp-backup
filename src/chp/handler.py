@@ -8,6 +8,8 @@ failure part-way is retried on the next run (writes are at-least-once; dbt dedup
 import json
 from datetime import datetime, timezone
 
+from botocore.exceptions import ClientError
+
 from chp.fetch import get_feed
 from chp.parse import parse_snapshot
 from chp.state import (
@@ -25,9 +27,8 @@ from common.lake import put_raw, write_bronze
 
 def main(event, context):
     settings = load()
-    now = datetime.now(timezone.utc)
-
     body = get_feed(settings.feed_url)
+    now = datetime.now(timezone.utc)  # after the download: when we actually saw this snapshot
     snap = parse_snapshot(body, now, settings.dispatch_ids)
     hashes = incident_hashes(snap)
     current = snapshot_hash(hashes)
@@ -50,7 +51,13 @@ def main(event, context):
     for table, df in tables.items():
         write_bronze(df, settings.bucket, settings.glue_db, table, ["dt"])
 
-    save_state(settings.state_table, State(current, incidents, state.version))
+    try:
+        save_state(settings.state_table, State(current, incidents, state.version))
+    except ClientError as e:
+        if e.response["Error"]["Code"] != "ConditionalCheckFailedException":
+            raise
+        # An overlapping run saved first. Its state wins; ours is dropped (dbt reads the latest version).
+        return _log({"status": "superseded", "changed": len(changed)})
     return _log({"status": "changed", "key": key, "open": len(incidents), "changed": len(changed),
                  "closed": len(closures), **{t: len(df) for t, df in tables.items()}})
 

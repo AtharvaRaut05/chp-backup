@@ -1,7 +1,9 @@
--- Typical traffic per mainline sensor, weekday vs weekend, per 5-minute slot of the day
--- (Pacific time): the normal daily pattern used to carry the pre-crash baseline forward.
+-- Measured speed and flow per mainline sensor, per day and 5-minute slot (Pacific time):
+-- the history that "typical traffic" is computed from in int_incident_traffic.
 -- Only measured (not imputed) readings from healthy sensor-days, and only sensors near an incident.
--- Gets more reliable as weeks of history accumulate; n_days says how many days back it.
+--
+-- Kept per day (not pre-averaged) so each incident's typical traffic can leave out its own day:
+-- otherwise the crash's own slowdown would drag "typical" down and hide the backup.
 
 with sensors as (
     select distinct station_id
@@ -24,10 +26,10 @@ readings as (
 
 select
     station_id,
-    {{ day_type('ts_local') }}                               as day_type,
-    {{ slot_of_day('ts_local') }}                            as slot,
-    approx_percentile(avg_speed, 0.5)                        as typical_speed,
-    approx_percentile(total_flow, 0.5)                       as typical_flow,
-    count(distinct dt)                                       as n_days
+    dt,
+    {{ day_type('ts_local') }}    as day_type,
+    {{ slot_of_day('ts_local') }} as slot,
+    avg(avg_speed)                as speed,
+    avg(total_flow)               as flow
 from readings
-group by 1, 2, 3
+group by 1, 2, 3, 4

@@ -53,3 +53,33 @@ models:
 
   - name: stg_pems_5min
     description: 5-minute mainline readings with an is_observed quality flag (view).
+
+unit_tests:
+  - name: chp_incidents_direction_and_closures
+    model: stg_chp_incidents
+    description: >
+      u101: CHP says "US101 E" in the Valley; PeMS calls that direction S.
+      back: dropped out of the feed (closure recorded at 15:10) but came back at 15:20 -> still open.
+      gone: closed for real at 15:30, after its last version.
+    given:
+      - input: source('bronze', 'chp_incidents')
+        rows:
+          - {log_id: u101, dispatch_id: LACC, log_time: "2026-10-01 15:00:00", polled_at: "2026-10-01 15:01:00", location: "US101 E / TOPANGA CANYON BLVD", location_desc: "EB 101 JEO TOPANGA", log_type_code: "1182", log_type: "1182-Trfc Collision-No Inj", area: null}
+          - {log_id: back, dispatch_id: LACC, log_time: "2026-10-01 15:00:00", polled_at: "2026-10-01 15:01:00", location: "I405 N / Sunset Blvd", log_type_code: "1182", log_type: "1182-Trfc Collision-No Inj", location_desc: null, area: null}
+          - {log_id: back, dispatch_id: LACC, log_time: "2026-10-01 15:00:00", polled_at: "2026-10-01 15:20:00", location: "I405 N / Sunset Blvd", log_type_code: "1182", log_type: "1182-Trfc Collision-No Inj", location_desc: null, area: null}
+          - {log_id: gone, dispatch_id: LACC, log_time: "2026-10-01 15:00:00", polled_at: "2026-10-01 15:01:00", location: "SR91 W / Main St", log_type_code: "1182", log_type: "1182-Trfc Collision-No Inj", location_desc: null, area: null}
+      - input: source('bronze', 'chp_closures')
+        rows:
+          - {log_id: back, last_seen: "2026-10-01 15:07:00", closed_detected_at: "2026-10-01 15:10:00"}
+          - {log_id: gone, last_seen: "2026-10-01 15:27:00", closed_detected_at: "2026-10-01 15:30:00"}
+      - input: ref('dispatch_districts')
+        rows:
+          - {dispatch_id: LACC, district: "07"}
+      - input: ref('stg_pems_pairing')
+        rows:
+          - {district: "07", day: "2026-10-01", status: paired}
+    expect:
+      rows:
+        - {log_id: u101, freeway: 101, direction: S, is_closed: false, pairing_status: paired}
+        - {log_id: back, freeway: 405, direction: N, is_closed: false, pairing_status: paired}
+        - {log_id: gone, freeway: 91, direction: W, is_closed: true, pairing_status: paired}

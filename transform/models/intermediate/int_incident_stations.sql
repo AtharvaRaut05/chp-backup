@@ -68,6 +68,7 @@ roles as (
 
 select
     *,
-    row_number() over (partition by log_id, role order by miles_upstream) as role_rank
+    -- rank 1 = the sensor at or just upstream of the incident (downstream-tolerance sensors rank last)
+    row_number() over (partition by log_id, role order by miles_upstream < 0, miles_upstream) as role_rank
 from roles
 where role is not null

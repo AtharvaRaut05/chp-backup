@@ -35,12 +35,17 @@ def main(event, context):
         path = client.download(url, Path(tmp) / name)
         put_file(settings.bucket, f"raw/pems/district={district:02d}/type=station_5min/{name}", path)
         df = parse_station_5min(path, district, day)
+        if df.empty:
+            raise ValueError(f"{name} parsed to 0 rows")  # don't mark an empty day as paired
         # Replacing the partition makes a retry after a partial failure safe.
         write_bronze(df, settings.bucket, settings.glue_db, "pems_station_5min", ["district", "dt"],
                      mode="overwrite_partitions")
-        meta = _sync_meta(settings, client, district, day.year, Path(tmp))
-
-    pairing.put(settings, district, day, "paired", rows=len(df))
+        pairing.put(settings, district, day, "paired", rows=len(df))
+        try:  # station locations change rarely; a metadata hiccup shouldn't fail a good day
+            meta = _sync_meta(settings, client, district, day.year, Path(tmp))
+        except Exception as e:  # noqa: BLE001  (retried with the next day's fetch)
+            meta = f"failed: {e}"
+            print(f"WARNING station metadata sync failed for district {district}: {e}")
     return _log({"district": district, "date": day.isoformat(), "status": "paired",
                  "rows": len(df), "meta": meta})
 

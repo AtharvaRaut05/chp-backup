@@ -110,7 +110,33 @@ def test_types_are_stable(snap):
     assert str(snap.incidents["lat"].dtype) == "float64"
 
 
-def test_empty_feed_still_has_columns():
-    empty = parse_snapshot(b"<State></State>", POLLED_AT, ("LACC",))
+def test_no_matching_incidents_still_has_columns():
+    empty = parse_snapshot(FIXTURE.read_bytes(), POLLED_AT, ("NONE",))
     assert len(empty.incidents) == 0
     assert "log_time" in empty.incidents.columns
+
+
+# --- feeds that must not be read as "no incidents" ---------------------------
+
+@pytest.mark.parametrize("body", [
+    b"<State></State>",
+    b"<html><body><p>Service unavailable</p></body></html>",
+    b'<?xml version="1.0"?><Error><Code>AccessDenied</Code></Error>',
+])
+def test_error_pages_are_rejected(body):
+    from chp.parse import BadFeed
+    with pytest.raises(BadFeed):
+        parse_snapshot(body, POLLED_AT, ("LACC",))
+
+
+@pytest.mark.parametrize("value, expected", [
+    ("Sep 26 2026  4:28PM", datetime(2026, 9, 26, 23, 28, tzinfo=timezone.utc)),
+    ("Sep 26 2026 4:28 PM", datetime(2026, 9, 26, 23, 28, tzinfo=timezone.utc)),
+    ("Jan 5 2026 9:01AM", datetime(2026, 1, 5, 17, 1, tzinfo=timezone.utc)),  # PST
+])
+def test_time_formats(value, expected):
+    assert _parse_chp_time(value) == expected
+
+
+def test_unreadable_time_is_empty_not_a_crash():
+    assert _parse_chp_time("sometime soon") is None

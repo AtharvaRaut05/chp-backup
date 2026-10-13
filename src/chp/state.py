@@ -16,7 +16,7 @@ import pandas as pd
 
 from chp.parse import Snapshot
 
-CLOSE_AFTER_MISSES = 3  # consecutive changed snapshots an incident must be absent from
+CLOSE_AFTER_MISSES = 3  # consecutive polls an incident must be missing from before it counts as closed
 STATE_KEY = "chp_open_incidents"
 _HASH_EXCLUDE = ["polled_at", "dt", "unit_seq"]  # change every poll or with XML order
 

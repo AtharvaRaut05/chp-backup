@@ -16,6 +16,18 @@ models:
       - name: backup_minutes
         tests: [not_null]
 
+  - name: fct_training_landmarks
+    description: >
+      Training set. One row per measurable incident per landmark (minutes after the log time,
+      var landmarks): features known at that moment (incident, dispatcher notes seen so far, units,
+      pre-crash traffic, traffic since the crash) and the target, remaining_minutes until traffic
+      is back to normal, with is_censored when that's only a minimum.
+    columns:
+      - name: log_id
+        tests: [not_null]
+      - name: remaining_minutes
+        tests: [not_null]
+
 unit_tests:
   - name: backup_label_start_recovery_and_censoring
     model: fct_incident_backup
@@ -25,6 +37,12 @@ unit_tests:
       e: a 10-minute recovery doesn't count; real recovery at 25.
       f: slowdown at 40 min is after the 30-min onset window -> not attributed.
       d: no healthy sensor before the crash -> not labeled.
+      g: sensors stop reporting at 10 min, before the 30-min onset window ends -> "no backup" is
+         not certain, so not labeled.
+      h: backed up from 0, then no readings from 15 to 25 min (a 20-min hole): we lost sight of
+         it, so it's censored at 15 min (not a 30-min backup that recovered at 30).
+      i: backed up 0-25 with one missed reading at 10: a short hole doesn't end it; recovers at 30.
+      j: never slowed, but no readings from 5 to 30 min: "no backup" isn't certain, not labeled.
     given:
       - input: ref('int_incident_traffic')
         rows:
@@ -48,6 +66,21 @@ unit_tests:
           - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 5, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 10, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 15, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 20, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 25, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: b, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 30, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: g, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: g, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: g, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: g, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 10, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: h, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.5, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: h, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.5, minutes_from_log: 0, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: h, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.5, minutes_from_log: 5, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: h, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.5, minutes_from_log: 10, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: h, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.5, minutes_from_log: 30, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: h, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.5, minutes_from_log: 35, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: h, role: queue, is_observed: true, station_id: 1, miles_upstream: 2.5, minutes_from_log: 40, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: c, role: queue, is_observed: true, station_id: 1, miles_upstream: 3.0, minutes_from_log: 5, avg_speed: 60.0, expected_speed: 60.0}
@@ -65,6 +98,20 @@ unit_tests:
           - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 30, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 35, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: e, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.5, minutes_from_log: 40, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 0, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 5, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 15, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 20, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 25, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 30, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 35, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 40, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: i, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 45, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: j, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: j, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: j, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 35, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: j, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 40, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: -5, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
           - {log_id: f, role: queue, is_observed: true, station_id: 1, miles_upstream: 1.0, minutes_from_log: 5, avg_speed: 60.0, expected_speed: 60.0}
@@ -88,10 +135,107 @@ unit_tests:
           - {log_id: e, is_measurable: true}
           - {log_id: f, is_measurable: true}
           - {log_id: d, is_measurable: false}
+          - {log_id: g, is_measurable: true}
+          - {log_id: h, is_measurable: true}
+          - {log_id: i, is_measurable: true}
+          - {log_id: j, is_measurable: true}
     expect:
       rows:
-        - {log_id: a, has_backup: true, backup_start_min: 0, backup_end_min: 15, backup_minutes: 15, is_censored: false, max_extent_miles: 4.0}
-        - {log_id: b, has_backup: false, backup_start_min: null, backup_end_min: null, backup_minutes: 0, is_censored: false, max_extent_miles: null}
-        - {log_id: c, has_backup: true, backup_start_min: 10, backup_end_min: null, backup_minutes: 20, is_censored: true, max_extent_miles: 3.0}
-        - {log_id: e, has_backup: true, backup_start_min: 0, backup_end_min: 25, backup_minutes: 25, is_censored: false, max_extent_miles: 1.5}
-        - {log_id: f, has_backup: false, backup_start_min: null, backup_end_min: null, backup_minutes: 0, is_censored: false, max_extent_miles: null}
+        - {log_id: a, has_backup: true, backup_start_min: 0, backup_end_min: 15, backup_minutes: 15, is_censored: false, observed_until_min: 35, max_extent_miles: 4.0}
+        - {log_id: b, has_backup: false, backup_start_min: null, backup_end_min: null, backup_minutes: 0, is_censored: false, observed_until_min: 35, max_extent_miles: null}
+        - {log_id: c, has_backup: true, backup_start_min: 10, backup_end_min: null, backup_minutes: 20, is_censored: true, observed_until_min: 30, max_extent_miles: 3.0}
+        - {log_id: e, has_backup: true, backup_start_min: 0, backup_end_min: 25, backup_minutes: 25, is_censored: false, observed_until_min: 45, max_extent_miles: 1.5}
+        - {log_id: f, has_backup: false, backup_start_min: null, backup_end_min: null, backup_minutes: 0, is_censored: false, observed_until_min: 50, max_extent_miles: null}
+        - {log_id: i, has_backup: true, backup_start_min: 0, backup_end_min: 30, backup_minutes: 30, is_censored: false, observed_until_min: 50, max_extent_miles: 1.0}
+        - {log_id: h, has_backup: true, backup_start_min: 0, backup_end_min: null, backup_minutes: 15, is_censored: true, observed_until_min: 15, max_extent_miles: 2.5}
+
+  - name: training_landmarks_use_only_what_was_known
+    model: fct_training_landmarks
+    description: >
+      Incident a: backed up from 0 to 15 min. A blocking note is seen at +3, lanes reopen at +15,
+      a SigAlert note is seen at +25 (CHP's own note time says +2, but we hadn't seen it yet).
+      At 10 min: lanes blocked, traffic backed up, 5 min of backup left.
+      At 20 min: lanes open, backup over. At 30 min: the SigAlert note now counts.
+      Incident c: backup from 10 min, still going when data ended -> censored at every landmark.
+    overrides:
+      vars: {landmarks: [10, 20, 30]}
+    given:
+      - input: ref('fct_incident_backup')
+        rows:
+          - {log_id: a, has_backup: true, backup_start_min: 0, backup_end_min: 15, backup_minutes: 15, is_censored: false}
+          - {log_id: c, has_backup: true, backup_start_min: 10, backup_end_min: null, backup_minutes: 30, is_censored: true}
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: a, log_time: "2026-10-01 15:00:00", first_polled_at: "2026-10-01 15:01:00", initial_type_code: "1182", closed_detected_at: "2026-10-01 15:28:00"}
+          - {log_id: c, log_time: "2026-10-01 15:00:00", first_polled_at: "2026-10-01 15:01:00", initial_type_code: "1183", closed_detected_at: null}
+      - input: ref('int_note_features')
+        rows:
+          - {log_id: a, first_seen_at: "2026-10-01 15:03:00", is_blocking: true, lanes_open: false, lanes_blocked: 2, sigalert: false, type_changed_to: null}
+          - {log_id: a, first_seen_at: "2026-10-01 15:15:00", is_blocking: false, lanes_open: true, lanes_blocked: null, sigalert: false, type_changed_to: "1181"}
+          - {log_id: a, first_seen_at: "2026-10-01 15:25:00", is_blocking: false, lanes_open: false, lanes_blocked: null, sigalert: true, type_changed_to: null}
+      - input: ref('stg_chp_units')
+        rows:
+          - {log_id: a, unit_time: "2026-10-01 15:01:00", unit_text: "Unit Assigned"}
+          - {log_id: a, unit_time: "2026-10-01 15:08:00", unit_text: "Unit At Scene"}
+      - input: ref('int_incident_precrash')
+        rows:
+          - {log_id: a, site_speed: 64.0}
+          - {log_id: c, site_speed: 50.0}
+      - input: ref('int_incident_traffic')
+        rows:
+          - {log_id: a, role: queue, is_observed: true, miles_upstream: 2.0, minutes_from_log: 0, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, miles_upstream: 2.0, minutes_from_log: 5, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, miles_upstream: 2.0, minutes_from_log: 10, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, miles_upstream: 2.0, minutes_from_log: 15, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, miles_upstream: 2.0, minutes_from_log: 20, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: a, role: queue, is_observed: true, miles_upstream: 2.0, minutes_from_log: 25, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, miles_upstream: 3.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, miles_upstream: 3.0, minutes_from_log: 5, avg_speed: 60.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, miles_upstream: 3.0, minutes_from_log: 10, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, miles_upstream: 3.0, minutes_from_log: 15, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, miles_upstream: 3.0, minutes_from_log: 20, avg_speed: 30.0, expected_speed: 60.0}
+          - {log_id: c, role: queue, is_observed: true, miles_upstream: 3.0, minutes_from_log: 25, avg_speed: 30.0, expected_speed: 60.0}
+    expect:
+      rows:
+        - {log_id: a, landmark_min: 10, type_code: "1182", n_notes: 1, blocking_now: true,  max_lanes_blocked: 2, sigalert: false, units_assigned: 1, units_at_scene: 1, first_at_scene_min: 8, chp_closed: false, backed_up_now: true,  slowed_minutes_so_far: 10, remaining_minutes: 5,  is_censored: false}
+        - {log_id: a, landmark_min: 20, type_code: "1181", n_notes: 2, blocking_now: false, max_lanes_blocked: 2, sigalert: false, units_assigned: 1, units_at_scene: 1, first_at_scene_min: 8, chp_closed: false, backed_up_now: false, slowed_minutes_so_far: 15, remaining_minutes: 0,  is_censored: false}
+        - {log_id: a, landmark_min: 30, type_code: "1181", n_notes: 3, blocking_now: false, max_lanes_blocked: 2, sigalert: true,  units_assigned: 1, units_at_scene: 1, first_at_scene_min: 8, chp_closed: true,  backed_up_now: false, slowed_minutes_so_far: 15, remaining_minutes: 0,  is_censored: false}
+        - {log_id: c, landmark_min: 10, type_code: "1183", n_notes: 0, blocking_now: false, max_lanes_blocked: null, sigalert: false, units_assigned: 0, units_at_scene: 0, first_at_scene_min: null, chp_closed: false, backed_up_now: false, slowed_minutes_so_far: 0, remaining_minutes: 30, is_censored: true}
+        - {log_id: c, landmark_min: 20, type_code: "1183", n_notes: 0, blocking_now: false, max_lanes_blocked: null, sigalert: false, units_assigned: 0, units_at_scene: 0, first_at_scene_min: null, chp_closed: false, backed_up_now: true,  slowed_minutes_so_far: 10, remaining_minutes: 20, is_censored: true}
+        - {log_id: c, landmark_min: 30, type_code: "1183", n_notes: 0, blocking_now: false, max_lanes_blocked: null, sigalert: false, units_assigned: 0, units_at_scene: 0, first_at_scene_min: null, chp_closed: false, backed_up_now: true,  slowed_minutes_so_far: 20, remaining_minutes: 10, is_censored: true}
+
+  - name: training_landmarks_drop_rows_we_cannot_use
+    model: fct_training_landmarks
+    description: >
+      p: our poller first saw it 15 min after CHP logged it -> no 10-min row (its notes weren't visible yet).
+      q: backup from 0, lost sight of it at 15 min (censored) -> only the 10-min row; at 20 and 30
+         we don't know whether it was still going.
+    overrides:
+      vars: {landmarks: [10, 20, 30]}
+    given:
+      - input: ref('fct_incident_backup')
+        rows:
+          - {log_id: p, has_backup: false, backup_start_min: null, backup_minutes: 0, is_censored: false}
+          - {log_id: q, has_backup: true, backup_start_min: 0, backup_minutes: 15, is_censored: true}
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: p, log_time: "2026-10-01 15:00:00", first_polled_at: "2026-10-01 15:15:00"}
+          - {log_id: q, log_time: "2026-10-01 15:00:00", first_polled_at: "2026-10-01 15:00:00"}
+      - input: ref('int_note_features')
+        rows:
+          - {log_id: zzz, first_seen_at: "2026-10-01 15:00:00"}
+      - input: ref('stg_chp_units')
+        rows:
+          - {log_id: zzz, unit_time: "2026-10-01 15:00:00", unit_text: "Unit Assigned"}
+      - input: ref('int_incident_precrash')
+        rows:
+          - {log_id: p}
+          - {log_id: q}
+      - input: ref('int_incident_traffic')
+        rows:
+          - {log_id: zzz, role: queue, is_observed: true, miles_upstream: 1.0, minutes_from_log: 0, avg_speed: 60.0, expected_speed: 60.0}
+    expect:
+      rows:
+        - {log_id: p, landmark_min: 20, remaining_minutes: 0, is_censored: false}
+        - {log_id: p, landmark_min: 30, remaining_minutes: 0, is_censored: false}
+        - {log_id: q, landmark_min: 10, remaining_minutes: 5, is_censored: true}

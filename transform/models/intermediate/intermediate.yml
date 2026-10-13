@@ -38,7 +38,7 @@ models:
         tests: [not_null]
 
   - name: int_station_profile
-    description: Typical speed and flow per mainline sensor, weekday/weekend, per 5-minute slot.
+    description: Measured speed and flow per mainline sensor, per day and 5-minute slot (history for "typical" traffic).
 
   - name: int_incident_traffic
     description: 5-minute traffic around each paired incident with the pre-crash-adjusted expected speed.
@@ -99,11 +99,12 @@ unit_tests:
     given:
       - input: ref('stg_chp_incidents')
         rows:
-          - {log_id: x, log_time: "2026-10-01 17:00:00", pairing_status: paired}
+          - {log_id: x, log_time: "2026-10-01 17:00:00", incident_day: "2026-10-01", pairing_status: paired}
       - input: ref('int_incident_stations')
         rows:
           - {log_id: x, station_id: 1, station_type: ML, role: queue, role_rank: 1, miles_upstream: 0.0}
           - {log_id: x, station_id: 2, station_type: ML, role: queue, role_rank: 2, miles_upstream: 1.0}
+          - {log_id: x, station_id: 3, station_type: ML, role: queue, role_rank: 3, miles_upstream: 2.0}
       - input: ref('stg_pems_5min')
         rows:
           # 17:00 UTC = 10:00 AM PDT on a Thursday. Pre-crash window: 16:25-16:55 UTC.
@@ -112,22 +113,43 @@ unit_tests:
           - {station_id: 1, dt: "2026-10-01", ts: "2026-10-01 16:50:00", avg_speed: 40.0, is_observed: true}
           - {station_id: 1, dt: "2026-10-01", ts: "2026-10-01 17:10:00", avg_speed: 20.0, is_observed: true}
           - {station_id: 2, dt: "2026-10-01", ts: "2026-10-01 17:10:00", avg_speed: 65.0, is_observed: false}
+          - {station_id: 3, dt: "2026-10-01", ts: "2026-10-01 16:30:00", avg_speed: 50.0, is_observed: true}
+          - {station_id: 3, dt: "2026-10-01", ts: "2026-10-01 17:10:00", avg_speed: 30.0, is_observed: true}
       - input: ref('int_station_day_health')
         rows:
           - {station_id: 1, dt: "2026-10-01", is_healthy: true}
           - {station_id: 2, dt: "2026-10-01", is_healthy: false}
+          - {station_id: 3, dt: "2026-10-01", is_healthy: true}
       - input: ref('int_station_profile')
         rows:
           # slots (Pacific): 9:30 -> 114, 9:50 -> 118, 10:10 -> 122
-          - {station_id: 1, day_type: weekday, slot: 114, typical_speed: 50.0}
-          - {station_id: 1, day_type: weekday, slot: 118, typical_speed: 50.0}
-          - {station_id: 1, day_type: weekday, slot: 122, typical_speed: 60.0}
+          # Station 1 has three other weekdays. Its own day (Oct 1, the crash at 10:10 running 20 mph)
+          # must be left out: with it, typical at 10:10 would drop from 60 to 55.
+          - {station_id: 1, dt: "2026-09-28", day_type: weekday, slot: 114, speed: 50.0}
+          - {station_id: 1, dt: "2026-09-29", day_type: weekday, slot: 114, speed: 50.0}
+          - {station_id: 1, dt: "2026-09-30", day_type: weekday, slot: 114, speed: 50.0}
+          - {station_id: 1, dt: "2026-09-28", day_type: weekday, slot: 118, speed: 50.0}
+          - {station_id: 1, dt: "2026-09-29", day_type: weekday, slot: 118, speed: 50.0}
+          - {station_id: 1, dt: "2026-09-30", day_type: weekday, slot: 118, speed: 50.0}
+          - {station_id: 1, dt: "2026-09-28", day_type: weekday, slot: 122, speed: 55.0}
+          - {station_id: 1, dt: "2026-09-29", day_type: weekday, slot: 122, speed: 60.0}
+          - {station_id: 1, dt: "2026-09-30", day_type: weekday, slot: 122, speed: 65.0}
+          - {station_id: 1, dt: "2026-10-01", day_type: weekday, slot: 122, speed: 20.0}
+          # A weekend day doesn't count toward a weekday's typical.
+          - {station_id: 1, dt: "2026-09-27", day_type: weekend, slot: 122, speed: 70.0}
+          # Station 3 has only two other days: too few, so it falls back to its pre-crash speed.
+          - {station_id: 3, dt: "2026-09-29", day_type: weekday, slot: 114, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-30", day_type: weekday, slot: 114, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-29", day_type: weekday, slot: 122, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-30", day_type: weekday, slot: 122, speed: 60.0}
     expect:
       rows:
         # pre-crash: running at 40 where 50 is typical -> ratio 0.8; at +10 min typical is 60 -> expected 48
-        - {log_id: x, minutes_from_log: -30, avg_speed: 40.0, expected_speed: 40.0, baseline_method: precrash_adjusted}
-        - {log_id: x, minutes_from_log: -10, avg_speed: 40.0, expected_speed: 40.0, baseline_method: precrash_adjusted}
-        - {log_id: x, minutes_from_log: 10, avg_speed: 20.0, expected_speed: 48.0, baseline_method: precrash_adjusted}
+        - {log_id: x, station_id: 1, minutes_from_log: -30, avg_speed: 40.0, expected_speed: 40.0, baseline_method: precrash_adjusted}
+        - {log_id: x, station_id: 1, minutes_from_log: -10, avg_speed: 40.0, expected_speed: 40.0, baseline_method: precrash_adjusted}
+        - {log_id: x, station_id: 1, minutes_from_log: 10, avg_speed: 20.0, expected_speed: 48.0, baseline_method: precrash_adjusted}
+        - {log_id: x, station_id: 3, minutes_from_log: -30, avg_speed: 50.0, expected_speed: 50.0, baseline_method: precrash_only}
+        - {log_id: x, station_id: 3, minutes_from_log: 10, avg_speed: 30.0, expected_speed: 50.0, baseline_method: precrash_only}
 
   # ---- note features (real CHP notes) ----
   - name: note_features_lane_blocking

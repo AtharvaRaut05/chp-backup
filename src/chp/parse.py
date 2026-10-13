@@ -58,9 +58,19 @@ class Snapshot:
     units: pd.DataFrame
 
 
+class BadFeed(ValueError):
+    """Well-formed XML that isn't the incident feed (error page, empty document)."""
+
+
 def parse_snapshot(xml: bytes, polled_at: datetime, dispatch_ids: tuple[str, ...]) -> Snapshot:
-    """Parse a feed snapshot, keeping only incidents from the given Dispatch IDs."""
+    """Parse a feed snapshot, keeping only incidents from the given Dispatch IDs.
+
+    Raises BadFeed if the document isn't the statewide feed, so an error page can never be read
+    as "every incident closed".
+    """
     root = ET.fromstring(xml)
+    if root.tag != "State" or root.find("Center/Dispatch") is None:
+        raise BadFeed(f"unexpected feed document: <{root.tag}> with no dispatch centers")
     keep = set(dispatch_ids)
     incidents, details, units = [], [], []
 
@@ -139,14 +149,24 @@ def _text(el: ET.Element, tag: str) -> str | None:
 
 
 def _parse_chp_time(s: str | None) -> datetime | None:
-    """'Sep 26 2026  4:28PM' (Pacific) -> UTC datetime.
+    """'Sep 26 2026  4:28PM' (Pacific) -> UTC datetime; None if missing or unreadable.
 
+    An unreadable time is logged and left empty rather than failing the whole poll.
     During the November DST fall-back hour, 1:00-1:59AM is ambiguous; fold=0 treats it
     as daylight time (the first occurrence).
     """
     if not s:
         return None
-    local = datetime.strptime(" ".join(s.split()), "%b %d %Y %I:%M%p")
+    text = " ".join(s.split()).upper().replace(" AM", "AM").replace(" PM", "PM")
+    for fmt in ("%b %d %Y %I:%M%p", "%b %d %Y %I:%M:%S%p", "%m/%d/%Y %I:%M%p"):
+        try:
+            local = datetime.strptime(text, fmt)
+            break
+        except ValueError:
+            continue
+    else:
+        print(f"unreadable CHP time: {s!r}")
+        return None
     return local.replace(tzinfo=PACIFIC).astimezone(timezone.utc)
 
 
