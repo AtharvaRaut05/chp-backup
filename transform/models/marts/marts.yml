@@ -207,11 +207,11 @@ unit_tests:
   - name: training_landmarks_drop_rows_we_cannot_use
     model: fct_training_landmarks
     description: >
-      p: our poller first saw it 15 min after CHP logged it -> no 10-min row (its notes weren't visible yet).
-      q: backup from 0, lost sight of it at 15 min (censored) -> only the 10-min row; at 20 and 30
+      p: our poller first saw it 15 min after CHP logged it -> no 5- or 10-min rows (its notes weren't visible yet).
+      q: backup from 0, lost sight of it at 15 min (censored) -> only the 5- and 10-min rows; at 20 and 30
          we don't know whether it was still going.
     overrides:
-      vars: {landmarks: [10, 20, 30]}
+      vars: {landmarks: [5, 10, 20, 30]}
     given:
       - input: ref('fct_incident_backup')
         rows:
@@ -238,4 +238,5 @@ unit_tests:
       rows:
         - {log_id: p, landmark_min: 20, remaining_minutes: 0, is_censored: false}
         - {log_id: p, landmark_min: 30, remaining_minutes: 0, is_censored: false}
+        - {log_id: q, landmark_min: 5, remaining_minutes: 10, is_censored: true}
         - {log_id: q, landmark_min: 10, remaining_minutes: 5, is_censored: true}

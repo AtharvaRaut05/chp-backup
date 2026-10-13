@@ -7,6 +7,8 @@
 --   approach_*  upstream_miles to approach_miles upstream: demand arriving at the queue
 --   merge_* / exit_*  ramp and connector volume entering / leaving the queue zone
 --   *_trend     speed in the last 15 min minus the 15 min before that (negative = slowing)
+--   *_lanes     mainline lanes at the site sensor / averaged over the approach sensors (for
+--               capacity: how many lanes a crash leaves open, how much traffic per lane)
 --   is_measurable  at least one healthy queue sensor reported before the crash; incidents
 --                  without one can't have their backup measured and are left out of labels
 
@@ -31,10 +33,12 @@ site as (
 recent_split as (
     select
         p.*,
+        st.lanes,
         p.station_id = s.site_station_id       as is_site,
         p.minutes_from_log >= -({{ lag }} + 15) as is_recent
     from pre p
     left join site s on s.log_id = p.log_id
+    left join {{ ref('int_incident_stations') }} st on st.log_id = p.log_id and st.station_id = p.station_id
 )
 
 select
@@ -45,6 +49,7 @@ select
     avg(avg_occupancy) filter (where is_site)                      as site_occupancy,
     avg(total_flow)    filter (where is_site)                      as site_flow,
     max(pre_ratio)     filter (where is_site)                      as site_ratio_to_typical,
+    max(lanes)         filter (where is_site)                      as site_lanes,
     avg(avg_speed) filter (where is_site and is_recent)
       - avg(avg_speed) filter (where is_site and not is_recent)    as site_speed_trend,
 
@@ -60,6 +65,7 @@ select
     -- approach zone (traffic about to arrive)
     avg(avg_speed)     filter (where role = 'approach')                                     as approach_speed,
     avg(total_flow)    filter (where role = 'approach')                                     as approach_flow_per_sensor,
+    avg(lanes)         filter (where role = 'approach')                                     as approach_lanes,
     avg(total_flow) filter (where role = 'approach' and is_recent)
       - avg(total_flow) filter (where role = 'approach' and not is_recent)                  as approach_flow_trend,
 

@@ -57,6 +57,8 @@ notes as (
         -- (notes first seen in the same poll are ordered by their CHP note number)
         max_by(n.is_blocking, to_unixtime(n.first_seen_at) * 10000 + coalesce(n.detail_seq, 0)) filter (where n.is_blocking or n.lanes_open) as blocking_now,
         max(n.lanes_blocked)                                                     as max_lanes_blocked,
+        -- lane count in the most recent note that gave one (lanes reopen during clearance)
+        max_by(n.lanes_blocked, to_unixtime(n.first_seen_at) * 10000 + coalesce(n.detail_seq, 0)) filter (where n.lanes_blocked is not null) as latest_lanes_blocked,
         coalesce(bool_or(n.all_lanes), false)                                    as all_lanes,
         coalesce(bool_or(n.lanes_open), false)                                   as lanes_reopened,
         max(n.vehicles)                                                          as vehicles,
@@ -146,6 +148,7 @@ select
     n.ever_blocking,
     coalesce(n.blocking_now, false)                                              as blocking_now,
     n.max_lanes_blocked,
+    n.latest_lanes_blocked,
     n.all_lanes,
     n.lanes_reopened,
     n.vehicles,
@@ -167,6 +170,7 @@ select
     p.site_occupancy,
     p.site_flow,
     p.site_ratio_to_typical,
+    p.site_lanes,
     p.site_speed_trend,
     p.queue_speed,
     p.queue_min_speed,
@@ -175,6 +179,7 @@ select
     p.queue_sensors,
     p.approach_speed,
     p.approach_flow_per_sensor,
+    p.approach_lanes,
     p.approach_flow_trend,
     p.merge_flow,
     p.connector_merge_flow,
@@ -197,7 +202,8 @@ select
         when not l.has_backup then 0
         else greatest(l.backup_start_min + l.backup_minutes - lm.landmark_min, 0)
     end                                                                          as remaining_minutes,
-    l.is_censored
+    l.is_censored,
+    l.label_adjusted_share                          -- label quality (not a model input)
 
 from landmarks lm
 join incidents i on i.log_id = lm.log_id

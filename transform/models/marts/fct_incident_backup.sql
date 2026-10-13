@@ -9,6 +9,8 @@
 --   is_censored    still backed up when we lose sight of it: the data window ends
 --                  (series_after_minutes) or the queue sensors stop reporting. The true
 --                  duration is at least backup_minutes, as in survival analysis.
+--   label_adjusted_share  share of the readings behind the label that had a full "typical traffic"
+--                  baseline (vs. the pre-crash-speed fallback): a label-quality score, not a feature
 -- Only measurable incidents (a healthy queue sensor before the crash) are labeled, and
 -- "no backup" only counts if the sensors reported steadily through the whole onset window.
 -- Holes of up to max_gap_minutes in the readings are tolerated; a longer one ends what we can see.
@@ -20,6 +22,7 @@ with readings as (
         log_id,
         minutes_from_log,
         miles_upstream,
+        baseline_method,
         avg_speed / expected_speed as speed_ratio
     from {{ ref('int_incident_traffic') }}
     where role = 'queue'
@@ -96,6 +99,12 @@ recovery as (
     group by s.log_id
 ),
 
+quality as (
+    select log_id, avg(if(baseline_method = 'precrash_adjusted', 1.0, 0.0)) as label_adjusted_share
+    from readings
+    group by log_id
+),
+
 severity as (
     select
         s.log_id,
@@ -125,11 +134,13 @@ select
     coalesce(g.cutoff_t, st.last_t) + 5               as observed_until_min,
     sv.max_extent_miles,
     sv.min_speed_ratio,
-    sv.slowed_minutes
+    sv.slowed_minutes,
+    q.label_adjusted_share
 from starts st
 left join gaps g on g.log_id = st.log_id
 left join recovery r on r.log_id = st.log_id
 left join severity sv on sv.log_id = st.log_id
+left join quality q on q.log_id = st.log_id
 where st.start_t is not null
    or (    -- "no backup" only if the sensors reported steadily through the onset window
            st.first_t <= 5

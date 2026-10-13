@@ -151,6 +151,34 @@ unit_tests:
         - {log_id: x, station_id: 3, minutes_from_log: -30, avg_speed: 50.0, expected_speed: 50.0, baseline_method: precrash_only}
         - {log_id: x, station_id: 3, minutes_from_log: 10, avg_speed: 30.0, expected_speed: 50.0, baseline_method: precrash_only}
 
+  # ---- pre-crash features: site sensor, lanes, ramp volume ----
+  - name: incident_precrash_site_lanes_and_merges
+    model: int_incident_precrash
+    description: >
+      Sensor 1 is closest but wasn't measuring, so the site is sensor 2 (4 lanes).
+      Approach sensors have 5 and 3 lanes -> 4 on average. The on-ramp reported in 2 of the 6
+      pre-crash slots (30 and 20 cars) -> 25 cars per 5 min, not 50/6.
+    given:
+      - input: ref('int_incident_traffic')
+        rows:
+          - {log_id: x, station_id: 1, station_type: ML, role: queue, role_rank: 1, minutes_from_log: -30, avg_speed: 20.0, total_flow: 50.0, is_observed: false}
+          - {log_id: x, station_id: 2, station_type: ML, role: queue, role_rank: 2, minutes_from_log: -30, avg_speed: 60.0, total_flow: 100.0, is_observed: true}
+          - {log_id: x, station_id: 2, station_type: ML, role: queue, role_rank: 2, minutes_from_log: -10, avg_speed: 50.0, total_flow: 120.0, is_observed: true}
+          - {log_id: x, station_id: 5, station_type: ML, role: approach, role_rank: 1, minutes_from_log: -30, avg_speed: 65.0, total_flow: 200.0, is_observed: true}
+          - {log_id: x, station_id: 6, station_type: ML, role: approach, role_rank: 2, minutes_from_log: -30, avg_speed: 63.0, total_flow: 100.0, is_observed: true}
+          - {log_id: x, station_id: 7, station_type: OR, role: merge, role_rank: 1, minutes_from_log: -30, avg_speed: null, total_flow: 30.0, is_observed: true}
+          - {log_id: x, station_id: 7, station_type: OR, role: merge, role_rank: 1, minutes_from_log: -10, avg_speed: null, total_flow: 20.0, is_observed: true}
+      - input: ref('int_incident_stations')
+        rows:
+          - {log_id: x, station_id: 1, lanes: 5}
+          - {log_id: x, station_id: 2, lanes: 4}
+          - {log_id: x, station_id: 5, lanes: 5}
+          - {log_id: x, station_id: 6, lanes: 3}
+          - {log_id: x, station_id: 7, lanes: 1}
+    expect:
+      rows:
+        - {log_id: x, site_speed: 55.0, site_flow: 110.0, site_speed_trend: -10.0, site_lanes: 4, approach_lanes: 4.0, merge_flow: 25.0, queue_sensors: 1, is_measurable: true}
+
   # ---- note features (real CHP notes) ----
   - name: note_features_lane_blocking
     model: int_note_features

@@ -16,9 +16,9 @@ Reads the bronze tables written by the Lambdas (`traffic_bronze`) and builds cle
 | `int_station_profile` | Measured speed/flow per mainline sensor, per day and 5-minute slot: the history "typical traffic" is built from |
 | `int_incident_traffic` | Traffic from 60 min before to 180 min after each incident, with the expected no-incident speed |
 | `int_station_day_health` | Whether each sensor was actually measuring (not imputed) on each day |
-| `int_incident_precrash` | One row per incident: conditions before the crash (site speed and trend, queue zone, approaching volume, merging volume) |
+| `int_incident_precrash` | One row per incident: conditions before the crash (site speed and trend, queue zone, approaching volume, merging volume, lane counts) |
 | `fct_incident_backup` | **The label**: whether each incident caused a backup, start/end, duration, censoring, how far back it reached |
-| `fct_training_landmarks` | **The training set**: one row per incident at 10, 20 and 30 min after the log time, with everything known at that moment and the minutes left until traffic is normal |
+| `fct_training_landmarks` | **The training set**: one row per incident at 5, 10, 20 and 30 min after the log time, with everything known at that moment and the minutes left until traffic is normal |
 
 **Upstream** means where traffic comes from: for a northbound or eastbound incident that's a
 lower postmile (south/west of the crash); for southbound or westbound, a higher one.
@@ -48,6 +48,10 @@ closure only if detected by then, pre-crash traffic, and 5-minute readings that 
 then. Target: `remaining_minutes` until no queue sensor is backed up (0 if there was no backup or
 it had cleared), with `is_censored` when the data ended first. Landmarks before our poller first
 saw the incident, or after a censored backup's last observation, are left out.
+
+**Label quality:** `label_adjusted_share` is the share of readings behind each label that had a full
+"typical traffic" baseline rather than the pre-crash-speed fallback. It is used to check results
+on the cleanest labels, never as a model input.
 
 Thresholds and windows are `vars` in `dbt_project.yml`.
 

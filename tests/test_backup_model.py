@@ -5,60 +5,9 @@ import pytest
 pytest.importorskip("xgboost")
 
 from backup_model import (  # noqa: E402
-    FEATURES, LIVE, concordance, evaluate, fit_baseline, fit_model, gain_interval, predict_baseline, prepare,
-    split_by_day,
+    FEATURES, LIVE, VARIANTS, BoostedModel, Rule, add_engineered, km_median, prepare, split_by_day,
 )
-
-
-def fake_landmarks(n_incidents=1500, days=9, seed=0) -> pd.DataFrame:
-    """Same columns and Athena-style nullable dtypes as fct_training_landmarks.
-
-    Blocked lanes make backups likelier and longer. The notes and "live" traffic columns are noisy
-    views of whether traffic is backed up, so no single column gives the answer away.
-    """
-    rng = np.random.default_rng(seed)
-    rows = []
-    for i in range(n_incidents):
-        log_time = pd.Timestamp("2026-10-01 07:00") + pd.Timedelta(minutes=int(rng.integers(0, days * 1440)))
-        blocking = rng.random() < 0.4
-        lanes = int(rng.integers(1, 4)) if blocking else None
-        has_backup = rng.random() < (0.45 if blocking else 0.1)
-        total = float((20 + 15 * (lanes or 0)) * rng.lognormal(0, 0.5)) // 5 * 5 + 5 if has_backup else 0.0
-        censored = has_backup and total > 150
-        for lm in (10, 20, 30):
-            remaining = max(total - lm, 0.0)
-            looks_backed_up = (remaining > 0) != (rng.random() < 0.15)
-            row = {c: None for c in FEATURES}
-            row.update({
-                "log_id": f"i{i}", "landmark_min": lm, "log_time": log_time,
-                "dispatch_id": rng.choice(["LACC", "OCCC", "INCC"]), "district": "07", "freeway": "405",
-                "direction": rng.choice(["N", "S"]), "hour_local": log_time.hour, "day_of_week": 3,
-                "day_type": "weekday", "type_code": rng.choice(["1182", "1183"]), "n_notes": int(rng.integers(0, 6)),
-                "ever_blocking": blocking, "blocking_now": blocking and ((remaining > 0) != (rng.random() < 0.2)),
-                "max_lanes_blocked": lanes,
-                "all_lanes": False, "vehicles": int(rng.integers(1, 4)), "tow": blocking,
-                "units_assigned": 1, "chp_closed": False, "site_speed": float(rng.normal(60, 8)),
-                "queue_ratio_now": float(rng.normal(0.45 if looks_backed_up else 0.95, 0.1)),
-                "backed_up_now": looks_backed_up,
-                "slowed_minutes_so_far": float(min(total, lm - 5) * rng.uniform(0.3, 1.0) + 5 * (rng.random() < 0.2)),
-                "has_backup": has_backup, "total_backup_minutes": total,
-                "remaining_minutes": remaining, "is_censored": censored and remaining > 0,
-            })
-            rows.append(row)
-    df = pd.DataFrame(rows)
-    for c in ["max_lanes_blocked", "n_notes", "units_assigned", "vehicles", "landmark_min"]:
-        df[c] = df[c].astype("Int64")
-    for c in ["ever_blocking", "blocking_now", "all_lanes", "tow", "chp_closed", "backed_up_now",
-              "is_censored", "has_backup", "lanes_reopened", "ambulance"]:
-        df[c] = df[c].astype("boolean")
-    for c in ["dispatch_id", "district", "freeway", "direction", "day_type", "type_code"]:
-        df[c] = df[c].astype("string")
-    return df
-
-
-@pytest.fixture(scope="module")
-def data():
-    return prepare(fake_landmarks())
+from conftest import fake_landmarks  # noqa: E402
 
 
 def test_prepare_converts_nullable_types(data):
@@ -68,94 +17,119 @@ def test_prepare_converts_nullable_types(data):
 
 
 def test_prepare_rejects_missing_columns():
-    with pytest.raises(ValueError, match="site_speed"):
-        prepare(fake_landmarks(50).drop(columns="site_speed"))
+    with pytest.raises(ValueError, match="site_lanes"):
+        prepare(fake_landmarks(50).drop(columns="site_lanes"))
+
+
+def test_location_columns_are_not_features():
+    for v in VARIANTS:
+        assert {"freeway", "dispatch_id", "district", "direction"}.isdisjoint(v.features)
+
+
+def test_answer_columns_are_never_features():
+    answers = {"has_backup", "total_backup_minutes", "remaining_minutes", "is_censored", "latest_slot_min",
+               "backup_start_min", "backup_end_min", "max_extent_miles", "min_speed_ratio", "slowed_minutes",
+               "observed_until_min", "label_adjusted_share", "log_id", "log_time"}
+    for v in VARIANTS:
+        assert answers.isdisjoint(v.features) and answers.isdisjoint(v.simple_features)
+
+
+def test_no_live_variant_has_no_live_columns():
+    chp_only = [v for v in VARIANTS if "live" not in v.name][0]
+    assert set(LIVE).isdisjoint(chp_only.features + chp_only.simple_features + chp_only.rule_keys)
+
+
+def test_engineered_capacity_features():
+    df = pd.DataFrame({
+        "day_type": ["weekday", "weekday", "weekend", "weekday"],
+        "hour_local": [7.0, 14.0, 7.0, 12.0],
+        "blocking_now": [1.0, 1.0, 0.0, 1.0],
+        "all_lanes": [0.0, 1.0, 0.0, 0.0],
+        "max_lanes_blocked": [3.0, np.nan, np.nan, np.nan],
+        "latest_lanes_blocked": [2.0, np.nan, np.nan, np.nan],  # 3 were blocked, one has reopened
+        "site_lanes": [4.0, 3.0, 4.0, 4.0],
+        "approach_flow_per_sensor": [500.0, 300.0, 500.0, np.nan],  # vehicles per 5 min
+        "approach_lanes": [4.0, 3.0, 4.0, np.nan],
+        "site_flow": [500.0, 300.0, 500.0, 400.0],
+    })
+    out = add_engineered(df)
+    assert list(out["rush_hour_now"]) == [1, 0, 0, 0]       # weekend 7 AM isn't rush hour
+    assert list(out["rush_hour_soon"]) == [0, 1, 0, 0]
+    assert list(out["lanes_blocked_now"]) == [2, 3, 0, 1]   # latest count; all lanes -> all 3; unknown -> 1
+    assert list(out["lanes_open_share"]) == [0.5, 0.0, 1.0, 0.75]
+    assert out["demand_per_lane"].iloc[0] == 1500           # 500 * 12 / 4
+    assert out["demand_per_lane"].iloc[3] == 1200           # no approach sensor -> site: 400 * 12 / 4
+    # 1500/h/lane x 4 lanes arriving, 2 lanes x 2000/h left -> 1.5x more than can get through
+    assert out["demand_vs_capacity"].iloc[0] == pytest.approx(1.5)
+    # fully closed: 1200/h/lane x 3 lanes arriving, only a trickle (half a lane) gets through
+    assert out["demand_vs_capacity"].iloc[1] == pytest.approx(3.6)
+    assert list(out["lanes_group"]) == ["2+", "all", "none", "1"]
+
+
+def test_zero_lane_sensor_records_dont_produce_infinities():
+    df = pd.DataFrame({"day_type": ["weekday"], "hour_local": [8.0], "blocking_now": [1.0], "all_lanes": [0.0],
+                       "max_lanes_blocked": [1.0], "latest_lanes_blocked": [1.0], "site_lanes": [0.0],
+                       "approach_flow_per_sensor": [400.0], "approach_lanes": [0.0], "site_flow": [400.0]})
+    out = add_engineered(df)
+    numeric = out.select_dtypes("number")
+    assert not np.isinf(numeric.to_numpy()).any()
+
+
+def test_km_median_counts_still_going_backups_as_lower_bounds():
+    # 4 backups: 10 and 20 min ended; two were still going at 15 and 40.
+    # Naive median of the numbers = 17.5; Kaplan-Meier: S(10)=3/4, S(20)=3/4*(1-1/2)=3/8 <= 1/2 -> 20
+    assert km_median(pd.Series([10, 15, 20, 40]), pd.Series([False, True, False, True])) == 20
+    assert km_median(pd.Series([10, 20, 30]), pd.Series([False, False, False])) == 20
+    # more than half still going: the longest time is the best lower bound we have
+    assert km_median(pd.Series([10, 50, 60]), pd.Series([False, True, True])) == 60
 
 
 def test_split_is_by_whole_days_and_test_is_latest(data):
     train, test = split_by_day(data)
     assert set(train["log_id"]).isdisjoint(test["log_id"])
     assert train["incident_day"].max() < test["incident_day"].min()
-    share = test["log_id"].nunique() / data["log_id"].nunique()
-    assert 0.1 < share <= 0.26
+    assert 0.1 < test["log_id"].nunique() / data["log_id"].nunique() <= 0.26
 
 
 def test_split_edge_cases(data):
     days = sorted(data["incident_day"].unique())
-    two = data[data["incident_day"].isin(days[:2])]
-    train, test = split_by_day(two)
+    train, test = split_by_day(data[data["incident_day"].isin(days[:2])])
     assert train["incident_day"].nunique() == 1 and test["incident_day"].nunique() == 1
     with pytest.raises(ValueError, match="at least 2 days"):
         split_by_day(data[data["incident_day"] == days[0]])
 
 
-def test_baseline_falls_back_to_coarser_groups(data):
-    keys = ["landmark_min", "backed_up_now", "lanes_group", "type_code"]
-    model = fit_baseline(data, keys)
-    unseen = data.head(1).assign(type_code="9999", lanes_group="all")
-    pred = predict_baseline(model, unseen)
+def test_rule_falls_back_to_coarser_groups(data):
+    rule = Rule(["landmark_min", "backed_up_now", "lanes_group", "type_code"]).fit(data)
+    unseen = data.head(1).assign(type_code="9999", lanes_group="never seen")
+    pred = rule.predict(unseen)
     same = (data["landmark_min"] == unseen["landmark_min"].iloc[0]) & (data["backed_up_now"] == unseen["backed_up_now"].iloc[0])
-    assert pred[0] == data.loc[same, "remaining_minutes"].median()
-
-
-def test_concordance():
-    t, e = np.array([1, 2, 3]), np.array([1, 1, 1])
-    assert concordance(t, e, np.array([1, 2, 3])) == 1.0
-    assert concordance(t, e, np.array([3, 2, 1])) == 0.0
-    # censored at 1: we only know it outlasted nothing -> pairs (2,3) only, ranked right
-    assert concordance(np.array([1, 2, 3]), np.array([0, 1, 1]), np.array([9, 2, 3])) == 1.0
-    # tie: an event and a censored row at the same time; the event counts as shorter
-    assert concordance(np.array([5, 5]), np.array([1, 0]), np.array([1, 2])) == 1.0
-    assert concordance(np.array([5, 5]), np.array([1, 0]), np.array([2, 1])) == 0.0
+    assert pred["p_more_backup"].iloc[0] == pytest.approx((data.loc[same, "remaining_minutes"] > 0).mean())
+    pos = data[same & (data["remaining_minutes"] > 0)]
+    assert pred["minutes_if_more"].iloc[0] == km_median(pos["remaining_minutes"], pos["is_censored"] == 1)
 
 
 @pytest.fixture(scope="module")
-def fitted(data):
+def boosted(data):
     train, test = split_by_day(data)
-    return train, test, fit_model(train)
+    return train, test, BoostedModel(FEATURES).fit(train)
 
 
-def test_model_learns_from_noisy_signal(fitted):
-    train, test, model = fitted
+def test_boosted_predicts_probabilities_and_minutes(boosted):
+    _, test, model = boosted
     pred = model.predict(test)
+    assert pred["p_more_backup"].between(0, 1).all()
     assert (pred["minutes_if_more"] > 0).all()
-    keys = ["landmark_min", "backed_up_now", "lanes_group", "type_code"]
-    metrics = evaluate(test, predict_baseline(fit_baseline(train, keys), test), pred).set_index("landmark_min")
-    assert metrics.loc["all", "auc_more_backup"] > 0.75
-    assert metrics.loc["all", "c_index_duration"] > 0.6
-    assert metrics.loc["all", "mae_model"] < metrics.loc["all", "mae_always_0"]
 
 
-def test_answer_columns_are_never_features():
-    answers = {"has_backup", "total_backup_minutes", "remaining_minutes", "is_censored", "latest_slot_min",
-               "backup_start_min", "backup_end_min", "max_extent_miles", "min_speed_ratio", "slowed_minutes",
-               "observed_until_min", "log_id", "log_time"}
-    assert answers.isdisjoint(FEATURES)
-
-
-def test_unseen_category_becomes_missing_not_an_error(fitted):
-    _, test, model = fitted
+def test_unseen_category_becomes_missing_not_an_error(boosted):
+    _, test, model = boosted
     odd = test.head(3).copy()
     odd["type_code"] = pd.Categorical(["NEW1", "NEW2", "NEW3"])
     assert len(model.predict(odd)) == 3
 
 
-def test_without_live_traffic_uses_no_live_columns(data):
-    train, _ = split_by_day(data)
-    columns = [c for c in FEATURES if c not in LIVE]
-    model = fit_model(train, columns)
-    used = set(model.classifier.get_booster().feature_names)
-    assert used.isdisjoint(LIVE)
-
-
-def test_gain_interval_contains_the_point_estimate(fitted):
-    train, test, model = fitted
-    keys = ["landmark_min", "backed_up_now", "lanes_group", "type_code"]
-    gain, lo, hi = gain_interval(test, predict_baseline(fit_baseline(train, keys), test), model.predict(test))
-    assert lo <= gain <= hi
-
-
 def test_too_little_data_is_an_error_not_a_bad_model():
     tiny = prepare(fake_landmarks(n_incidents=40))
     with pytest.raises(ValueError, match="Collect more days"):
-        fit_model(tiny)
+        BoostedModel(FEATURES).fit(tiny)

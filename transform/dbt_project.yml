@@ -24,7 +24,7 @@ vars:
   onset_minutes: 30          # a backup must start within this many minutes of the log time
   max_gap_minutes: 15        # longest hole in the queue readings we look past; longer = we lost sight of it
   # Training set (see fct_training_landmarks)
-  landmarks: [10, 20, 30]    # minutes after the log time at which a prediction is made
+  landmarks: [5, 10, 20, 30] # minutes after the log time at which a prediction is made
 
 models:
   traffic:
