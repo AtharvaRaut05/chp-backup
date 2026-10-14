@@ -19,10 +19,13 @@ vars:
   series_before_minutes: 60  # traffic history kept before the log time
   series_after_minutes: 180  # traffic kept after the log time
   min_profile_days: 3        # other days needed to trust a sensor's "typical" traffic for a time slot
-  # Backup label (see fct_incident_backup)
+  # Backup label (see int_backup_slots and fct_incident_backup)
   slow_ratio: 0.6            # a sensor is backed up when speed < this x expected speed
-  onset_minutes: 30          # a backup must start within this many minutes of the log time
-  max_gap_minutes: 15        # longest hole in the queue readings we look past; longer = we lost sight of it
+  recover_ratio: 0.8         # ...and has recovered only once speed is back above this x expected
+  jam_occupancy: 0.3         # no speed reading but a sensor this full (30% occupied) = stopped traffic
+  head_miles: 1.0            # the queue must start within this distance upstream of the crash
+  onset_minutes: 45          # a backup must start within this many minutes of the log time
+  max_gap_minutes: 15        # longest hole in the readings we look past; longer = we lost sight of it
   # Training set (see fct_training_landmarks)
   landmarks: [5, 10, 20, 30] # minutes after the log time at which a prediction is made
 

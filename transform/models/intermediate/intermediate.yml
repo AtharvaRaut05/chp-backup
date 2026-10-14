@@ -49,6 +49,17 @@ models:
               arguments:
                 values: [precrash_adjusted, precrash_only]
 
+  - name: int_incident_recurring
+    description: Normal congestion at each incident's site sensor now and over the next hour, from other days' history.
+    columns:
+      - name: log_id
+        tests: [unique, not_null]
+      - name: typical_congestion_minutes_left
+        tests: [not_null]
+
+  - name: int_backup_slots
+    description: Backup state of each incident per 5-minute slot (queue anchored at the crash), shared by the label and the live-traffic features.
+
   - name: int_incident_precrash
     description: Traffic conditions before each incident (one row per incident), safe to use as model inputs.
     columns:
@@ -178,6 +189,98 @@ unit_tests:
     expect:
       rows:
         - {log_id: x, site_speed: 55.0, site_flow: 110.0, site_speed_trend: -10.0, site_lanes: 4, approach_lanes: 4.0, merge_flow: 25.0, queue_sensors: 1, is_measurable: true}
+
+  # ---- normal congestion: typical speed now / later vs free flow, from other days ----
+  - name: incident_recurring_congestion_from_history
+    model: int_incident_recurring
+    description: >
+      Crash at 7:00 AM on a weekday (slot 84) at sensor 2. On three other weekdays the sensor
+      runs 32 mph at 7:00, 48 at 7:30, 56 at 8:00, 60 at 8:30 and 64 at night (free flow).
+      So: 50% of free flow now, 75% in 30 min, 87.5% in 60 min, back above 90% at 8:30 (90 min).
+      The crash day itself (5 mph) and a weekend day (20 mph) must not count.
+    given:
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: x, log_time: "2026-10-01 14:00:00", incident_day: "2026-10-01"}
+      - input: ref('int_incident_precrash')
+        rows:
+          - {log_id: x, site_station_id: 2}
+      - input: ref('int_station_profile')
+        rows:
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 0, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 12, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 24, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 36, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 84, speed: 32.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 90, speed: 48.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 96, speed: 56.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 102, speed: 60.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 0, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 12, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 24, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 36, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 84, speed: 32.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 90, speed: 48.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 96, speed: 56.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 102, speed: 60.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 0, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 12, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 24, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 36, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 84, speed: 32.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 90, speed: 48.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 96, speed: 56.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 102, speed: 60.0}
+          - {station_id: 2, dt: "2026-10-01", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 0, speed: 20.0}
+          - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 12, speed: 20.0}
+          - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 24, speed: 20.0}
+          - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 36, speed: 20.0}
+          - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 84, speed: 20.0}
+          - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 90, speed: 20.0}
+          - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 96, speed: 20.0}
+          - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 102, speed: 20.0}
+    expect:
+      rows:
+        - {log_id: x, free_flow_speed: 64.0, typical_ratio_now: 0.5, typical_ratio_in_30: 0.75, typical_ratio_in_60: 0.875, typical_congestion_minutes_left: 90}
+
+  # ---- backup state per slot: queue anchored at the crash, recovery band, stopped traffic ----
+  - name: backup_slots_queue_starts_at_the_crash
+    model: int_backup_slots
+    description: >
+      t=10: slow at 0.5 and 1.5 mi, normal at 3.0, slow again at 4.0 -> backed up, queue reaches 1.5 mi
+            (the 4.0 mi slowdown is cut off by normal traffic in between).
+      t=20: only the sensor 4 mi back is slow (a different bottleneck, as in audit #7/#8/#36) -> clear.
+            The 1.5 mi sensor isn't measuring and is ignored.
+      t=30: 70% of expected: neither backed up nor recovered (keeps a backup going, as in audit #20).
+      t=40: no speed but 40% occupied -> stopped traffic counts as backed up.
+      t=50: no sensor near the crash reporting -> no row (a gap).
+      t=60: no speed and nearly empty -> unknown: neither.
+      y: nearest sensor is 2.5 mi from the crash -> never labeled.
+    given:
+      - input: ref('int_incident_traffic')
+        rows:
+          - {log_id: x, role: queue, is_observed: true, station_id: 1, miles_upstream: -0.2, minutes_from_log: 10, avg_speed: 60.0, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: x, role: queue, is_observed: true, station_id: 2, miles_upstream: 0.5, minutes_from_log: 10, avg_speed: 18.0, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: x, role: queue, is_observed: true, station_id: 3, miles_upstream: 1.5, minutes_from_log: 10, avg_speed: 24.0, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: x, role: queue, is_observed: true, station_id: 4, miles_upstream: 3.0, minutes_from_log: 10, avg_speed: 60.0, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: x, role: queue, is_observed: true, station_id: 5, miles_upstream: 4.0, minutes_from_log: 10, avg_speed: 18.0, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: x, role: queue, is_observed: true, station_id: 1, miles_upstream: -0.2, minutes_from_log: 20, avg_speed: 60.0, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: x, role: queue, is_observed: true, station_id: 2, miles_upstream: 0.5, minutes_from_log: 20, avg_speed: 60.0, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: x, role: queue, is_observed: true, station_id: 5, miles_upstream: 4.0, minutes_from_log: 20, avg_speed: 12.0, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: x, role: queue, is_observed: false, station_id: 3, miles_upstream: 1.5, minutes_from_log: 20, avg_speed: 6.0, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: x, role: queue, is_observed: true, station_id: 2, miles_upstream: 0.5, minutes_from_log: 30, avg_speed: 42.0, expected_speed: 60.0, avg_occupancy: 0.15}
+          - {log_id: x, role: queue, is_observed: true, station_id: 2, miles_upstream: 0.5, minutes_from_log: 40, avg_speed: null, expected_speed: 60.0, avg_occupancy: 0.4}
+          - {log_id: x, role: queue, is_observed: true, station_id: 4, miles_upstream: 3.0, minutes_from_log: 50, avg_speed: 12.0, expected_speed: 60.0, avg_occupancy: 0.3}
+          - {log_id: x, role: queue, is_observed: true, station_id: 2, miles_upstream: 0.5, minutes_from_log: 60, avg_speed: null, expected_speed: 60.0, avg_occupancy: 0.1}
+          - {log_id: y, role: queue, is_observed: true, station_id: 9, miles_upstream: 2.5, minutes_from_log: 10, avg_speed: 12.0, expected_speed: 60.0, avg_occupancy: 0.3}
+    expect:
+      rows:
+        - {log_id: x, t: 10, is_slowed: true, is_clear: false, queue_extent_miles: 1.5, min_ratio: 0.3}
+        - {log_id: x, t: 20, is_slowed: false, is_clear: true, queue_extent_miles: null, min_ratio: 1.0}
+        - {log_id: x, t: 30, is_slowed: false, is_clear: false, queue_extent_miles: null, min_ratio: 0.7}
+        - {log_id: x, t: 40, is_slowed: true, is_clear: false, queue_extent_miles: 0.5, min_ratio: null}
+        - {log_id: x, t: 60, is_slowed: false, is_clear: false, queue_extent_miles: null, min_ratio: null}
 
   # ---- note features (real CHP notes) ----
   - name: note_features_lane_blocking

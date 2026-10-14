@@ -14,6 +14,10 @@ Two feature sets:
                         sensor data; the daily PeMS files arrive a day late.
   CHP + pre-crash only  CHP's notes and units plus traffic before the crash.
 
+Normal congestion at the spot (how slow it usually is now and in the next hour, and how long
+until it usually flows freely) tells the models whether a crash lands in the middle of rush hour
+or as it is ending.
+
 Location columns (freeway, dispatch center, district, direction) are deliberately NOT features:
 with a few weeks of data they let a model memorize which corridors had long backups instead of
 learning why. The road's lanes, traffic per lane and capacity left after the crash stand in for them.
@@ -47,6 +51,8 @@ FEATURES = [
     "queue_speed", "queue_min_speed", "queue_occupancy", "queue_speed_trend", "queue_sensors",
     "approach_speed", "approach_flow_per_sensor", "approach_flow_trend", "approach_lanes",
     "merge_flow", "connector_merge_flow", "exit_flow", "merge_points",
+    # normal congestion at this spot, from other days' history (int_incident_recurring)
+    "typical_ratio_now", "typical_ratio_in_30", "typical_ratio_in_60", "typical_congestion_minutes_left",
     # built from the above (prepare)
     *ENGINEERED,
     # traffic since the crash
@@ -56,6 +62,7 @@ SIMPLE_FEATURES = [
     "landmark_min", "blocking_now", "lanes_blocked_now", "all_lanes", "lanes_open_share", "vehicles",
     "overturned", "sigalert", "ambulance", "rush_hour_now", "rush_hour_soon", "is_weekend",
     "demand_vs_capacity", "site_ratio_to_typical", "queue_speed_trend",
+    "typical_ratio_now", "typical_ratio_in_60", "typical_congestion_minutes_left",
 ]
 SIMPLE_LIVE = ["queue_ratio_now", "extent_now_miles", "slowed_minutes_so_far"]
 

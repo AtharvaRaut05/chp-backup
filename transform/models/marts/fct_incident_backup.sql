@@ -1,116 +1,82 @@
 -- The label: did each incident cause a backup, and how long did it last?
+-- Built on int_backup_slots (the queue must start at the crash; see that model).
 --
--- A queue sensor is "backed up" in a 5-minute slot when its measured speed is below
--- slow_ratio x expected speed (the pre-crash-adjusted baseline).
---   backup start   first backed-up slot from log_lag_minutes before the log time up to
---                  onset_minutes after it (later slowdowns aren't attributed to the incident)
---   backup end     first slot after the start where no queue sensor is backed up for
---                  15 minutes straight (that slot and the next two)
+--   backup start   first slot from log_lag_minutes before the log time up to onset_minutes after
+--                  it where the crash site is backed up for at least two slots in a row (10 min);
+--                  a single 5-minute dip is noise. Later slowdowns aren't attributed to the incident.
+--   backup end     first slot after the start where the crash site is clear (back above
+--                  recover_ratio x expected) for 15 minutes straight (that slot and the next two).
+--                  Slots in between "slowed" and "clear" keep the backup going.
 --   is_censored    still backed up when we lose sight of it: the data window ends
---                  (series_after_minutes) or the queue sensors stop reporting. The true
---                  duration is at least backup_minutes, as in survival analysis.
+--                  (series_after_minutes) or the sensors at the crash site stop reporting for
+--                  longer than max_gap_minutes. The true duration is at least backup_minutes.
 --   label_adjusted_share  share of the readings behind the label that had a full "typical traffic"
 --                  baseline (vs. the pre-crash-speed fallback): a label-quality score, not a feature
--- Only measurable incidents (a healthy queue sensor before the crash) are labeled, and
--- "no backup" only counts if the sensors reported steadily through the whole onset window.
--- Holes of up to max_gap_minutes in the readings are tolerated; a longer one ends what we can see.
+-- Only incidents with a sensor near the crash site are labeled, and "no backup" only counts if
+-- the crash site was visible steadily through the whole onset window.
 
-{% set ratio = var('slow_ratio') %}
-
-with readings as (
-    select
-        log_id,
-        minutes_from_log,
-        miles_upstream,
-        baseline_method,
-        avg_speed / expected_speed as speed_ratio
-    from {{ ref('int_incident_traffic') }}
-    where role = 'queue'
-      and is_observed
-      and avg_speed is not null
-      and expected_speed > 0
-      and minutes_from_log >= -{{ var('log_lag_minutes') }}
-),
-
-slots as (
-    select
-        log_id,
-        minutes_from_log                                    as t,
-        min(speed_ratio)                                    as min_ratio,
-        bool_or(speed_ratio < {{ ratio }})                  as is_slowed,
-        max(case when speed_ratio < {{ ratio }} then miles_upstream end) as slowed_extent
-    from readings
-    group by log_id, minutes_from_log
+with slots as (
+    select * from {{ ref('int_backup_slots') }}
 ),
 
 measurable as (
     select log_id from {{ ref('int_incident_precrash') }} where is_measurable
 ),
 
-steps as (
-    select *, lead(t) over (partition by log_id order by t) - t as step
-    from slots
+sequenced as (
+    select
+        s.*,
+        lead(s.t, 1)         over (partition by s.log_id order by s.t) as t1,
+        lead(s.is_slowed, 1) over (partition by s.log_id order by s.t) as slowed1,
+        lead(s.is_clear, 1)  over (partition by s.log_id order by s.t) as clear1,
+        lead(s.t, 2)         over (partition by s.log_id order by s.t) as t2,
+        lead(s.is_clear, 2)  over (partition by s.log_id order by s.t) as clear2
+    from slots s
+    join measurable m on m.log_id = s.log_id
 ),
 
 starts as (
     select
-        s.log_id,
-        min(s.t) filter (where s.is_slowed and s.t <= {{ var('onset_minutes') }}) as start_t,
-        min(s.t)                                                               as first_t,
-        max(s.t)                                                               as last_t,
-        coalesce(max(s.step) filter (where s.t < {{ var('onset_minutes') }}), 0) as max_step_onset
-    from steps s
-    join measurable m on m.log_id = s.log_id
-    group by s.log_id
-),
-
-sequenced as (
-    select
-        s.*,
-        st.start_t,
-        lead(s.t, 1)         over (partition by s.log_id order by s.t) as t1,
-        lead(s.is_slowed, 1) over (partition by s.log_id order by s.t) as slowed1,
-        lead(s.t, 2)         over (partition by s.log_id order by s.t) as t2,
-        lead(s.is_slowed, 2) over (partition by s.log_id order by s.t) as slowed2
-    from slots s
-    join starts st on st.log_id = s.log_id
-),
-
--- first slot after the start followed by a long hole (or the end of the data): the backup is
--- observed up to here. Short holes (a missed reading or two) are tolerated.
-gaps as (
-    select log_id, min(t) as cutoff_t
+        log_id,
+        min(t) filter (where is_slowed and slowed1 and t1 = t + 5
+                         and t <= {{ var('onset_minutes') }})                     as start_t,
+        min(t)                                                                   as first_t,
+        max(t)                                                                   as last_t,
+        coalesce(max(t1 - t) filter (where t < {{ var('onset_minutes') }}), 0)   as max_step_onset
     from sequenced
-    where start_t is not null
-      and t >= start_t
-      and (t1 is null or t1 > t + {{ var('max_gap_minutes') }})
     group by log_id
+),
+
+gaps as (
+    -- first slot after the start followed by a long hole (or the end of the data)
+    select s.log_id, min(s.t) as cutoff_t
+    from sequenced s
+    join starts st on st.log_id = s.log_id
+    where st.start_t is not null
+      and s.t >= st.start_t
+      and (s.t1 is null or s.t1 > s.t + {{ var('max_gap_minutes') }})
+    group by s.log_id
 ),
 
 recovery as (
     select s.log_id, min(s.t) as end_t
     from sequenced s
+    join starts st on st.log_id = s.log_id
     join gaps g on g.log_id = s.log_id
-    where s.t > s.start_t
+    where s.t > st.start_t
       and s.t < g.cutoff_t
-      and not s.is_slowed
-      and s.t1 = s.t + 5 and not s.slowed1
-      and s.t2 = s.t + 10 and not s.slowed2
+      and s.is_clear
+      and s.t1 = s.t + 5  and s.clear1
+      and s.t2 = s.t + 10 and s.clear2
     group by s.log_id
-),
-
-quality as (
-    select log_id, avg(if(baseline_method = 'precrash_adjusted', 1.0, 0.0)) as label_adjusted_share
-    from readings
-    group by log_id
 ),
 
 severity as (
     select
         s.log_id,
-        greatest(max(s.slowed_extent), 0) as max_extent_miles,
-        min(s.min_ratio)             as min_speed_ratio,
-        count_if(s.is_slowed) * 5    as slowed_minutes
+        greatest(max(s.queue_extent_miles), 0) as max_extent_miles,
+        min(s.min_ratio)                       as min_speed_ratio,
+        count_if(s.is_slowed) * 5              as slowed_minutes
     from slots s
     join starts st on st.log_id = s.log_id
     join gaps g on g.log_id = s.log_id
@@ -118,6 +84,13 @@ severity as (
     where s.t >= st.start_t
       and s.t < coalesce(r.end_t, g.cutoff_t + 5)
     group by s.log_id
+),
+
+quality as (
+    select log_id, avg(if(baseline_method = 'precrash_adjusted', 1.0, 0.0)) as label_adjusted_share
+    from {{ ref('int_incident_traffic') }}
+    where role = 'queue' and is_observed and minutes_from_log >= -{{ var('log_lag_minutes') }}
+    group by log_id
 )
 
 select
@@ -142,7 +115,7 @@ left join recovery r on r.log_id = st.log_id
 left join severity sv on sv.log_id = st.log_id
 left join quality q on q.log_id = st.log_id
 where st.start_t is not null
-   or (    -- "no backup" only if the sensors reported steadily through the onset window
+   or (    -- "no backup" only if the crash site was visible steadily through the onset window
            st.first_t <= 5
        and st.last_t >= {{ var('onset_minutes') }}
        and st.max_step_onset <= {{ var('max_gap_minutes') }}

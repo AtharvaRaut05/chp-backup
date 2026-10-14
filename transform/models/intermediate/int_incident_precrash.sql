@@ -43,6 +43,7 @@ recent_split as (
 
 select
     log_id,
+    max(station_id) filter (where is_site)                         as site_station_id,
 
     -- at the incident site
     avg(avg_speed)     filter (where is_site)                      as site_speed,

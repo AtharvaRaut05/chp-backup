@@ -17,6 +17,7 @@ Reads the bronze tables written by the Lambdas (`traffic_bronze`) and builds cle
 | `int_incident_traffic` | Traffic from 60 min before to 180 min after each incident, with the expected no-incident speed |
 | `int_station_day_health` | Whether each sensor was actually measuring (not imputed) on each day |
 | `int_incident_precrash` | One row per incident: conditions before the crash (site speed and trend, queue zone, approaching volume, merging volume, lane counts) |
+| `int_backup_slots` | Backup state of each incident per 5-minute slot (shared by the label and the live-traffic features) |
 | `fct_incident_backup` | **The label**: whether each incident caused a backup, start/end, duration, censoring, how far back it reached |
 | `fct_training_landmarks` | **The training set**: one row per incident at 5, 10, 20 and 30 min after the log time, with everything known at that moment and the minutes left until traffic is normal |
 
@@ -33,9 +34,13 @@ just the pre-crash speed.
 **Sensor health:** many PeMS sensors are down for whole days and PeMS fills their readings in.
 A sensor only counts for an incident on days when at least 80% of its readings were measured.
 
-**Backup label:** a queue sensor is backed up when speed < 60% of expected. The backup starts at
-the first backed-up slot within 30 min of the log time and ends once no queue sensor is backed
-up for 15 straight minutes. Still backed up when we lose sight of it (3 hours after the log time,
+**Backup label** (`int_backup_slots`, `fct_incident_backup`): a sensor is backed up when its speed
+is below 60% of expected, or it has no speed but is at least 30% occupied (stopped traffic). The
+queue has to start at the crash: a sensor within 1 mile of it must be backed up, and the queue
+reaches back through the unbroken run of backed-up sensors behind it (slow sensors farther back with
+normal traffic in between are a different bottleneck). A backup starts at the first such slot
+within 45 min of the log time that lasts at least 10 minutes, and ends once the crash site is back
+above 80% of expected for 15 straight minutes (in between keeps it going). Still backed up when we lose sight of it (3 hours after the log time,
 or the sensors stop reporting) = censored. "No backup" only counts if the sensors reported through
 the whole 30-minute onset window; otherwise the incident isn't labeled.
 

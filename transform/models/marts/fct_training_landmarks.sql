@@ -18,7 +18,6 @@
 -- observation (we don't know whether it was still going).
 
 {% set landmarks = var('landmarks') %}
-{% set ratio = var('slow_ratio') %}
 
 with labels as (
     select * from {{ ref('fct_incident_backup') }}
@@ -95,20 +94,6 @@ units as (
     group by lm.log_id, lm.landmark_min
 ),
 
--- queue-zone traffic per 5-minute slot since the log time (same definition as the label)
-slots as (
-    select
-        log_id,
-        minutes_from_log as t,
-        min(avg_speed / expected_speed)                                          as min_ratio,
-        bool_or(avg_speed / expected_speed < {{ ratio }})                         as is_slowed,
-        max(case when avg_speed / expected_speed < {{ ratio }} then miles_upstream end) as slowed_extent
-    from {{ ref('int_incident_traffic') }}
-    where role = 'queue' and is_observed and avg_speed is not null and expected_speed > 0
-      and minutes_from_log >= -{{ var('log_lag_minutes') }}
-    group by log_id, minutes_from_log
-),
-
 -- live traffic known at each landmark: slots that had finished by then
 live as (
     select
@@ -116,13 +101,13 @@ live as (
         lm.landmark_min,
         max_by(s.min_ratio, s.t)                                                 as queue_ratio_now,
         max_by(s.is_slowed, s.t)                                                 as backed_up_now,
-        max_by(s.slowed_extent, s.t)                                             as extent_now_miles,
+        max_by(s.queue_extent_miles, s.t)                                        as extent_now_miles,
         min(s.min_ratio)                                                         as min_ratio_so_far,
-        count(case when s.is_slowed then 1 end) * 5                                          as slowed_minutes_so_far,
-        max(s.slowed_extent)                                                     as max_extent_so_far,
+        count(case when s.is_slowed then 1 end) * 5                              as slowed_minutes_so_far,
+        max(s.queue_extent_miles)                                                as max_extent_so_far,
         max(s.t)                                                                 as latest_slot_min
     from landmarks lm
-    left join slots s
+    left join {{ ref('int_backup_slots') }} s
         on s.log_id = lm.log_id
        and s.t <= lm.landmark_min - 5
     group by lm.log_id, lm.landmark_min
@@ -186,6 +171,12 @@ select
     p.exit_flow,
     p.merge_points,
 
+    -- normal congestion at this spot (other days' history)
+    r.typical_ratio_now,
+    r.typical_ratio_in_30,
+    r.typical_ratio_in_60,
+    r.typical_congestion_minutes_left,
+
     -- traffic since the crash, up to the landmark
     t.queue_ratio_now,
     coalesce(t.backed_up_now, false)                                             as backed_up_now,
@@ -209,6 +200,7 @@ from landmarks lm
 join incidents i on i.log_id = lm.log_id
 join labels l on l.log_id = lm.log_id
 join {{ ref('int_incident_precrash') }} p on p.log_id = lm.log_id
+left join {{ ref('int_incident_recurring') }} r on r.log_id = lm.log_id
 left join notes n on n.log_id = lm.log_id and n.landmark_min = lm.landmark_min
 left join units u on u.log_id = lm.log_id and u.landmark_min = lm.landmark_min
 left join live t on t.log_id = lm.log_id and t.landmark_min = lm.landmark_min
