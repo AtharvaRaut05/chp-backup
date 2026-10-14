@@ -36,7 +36,7 @@ def load(profile: str, refresh: bool) -> pd.DataFrame:
     import awswrangler as wr
     import boto3
 
-    session = boto3.Session(profile_name=profile, region_name="us-west-2")
+    session = boto3.Session(profile_name=profile or None, region_name="us-west-2")
     df = wr.athena.read_sql_query(
         "select * from fct_training_landmarks",
         database="traffic_silver", workgroup="traffic", boto3_session=session, ctas_approach=False,
@@ -53,7 +53,7 @@ def show(title: str, table: pd.DataFrame) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--profile", default="traffic")
+    ap.add_argument("--profile", default="traffic", help='AWS login profile; "" = default credentials (the AWS job)')
     ap.add_argument("--refresh", action="store_true")
     ap.add_argument("--boot", type=int, default=200, help="bootstrap resamples for the 95%% intervals")
     args = ap.parse_args()

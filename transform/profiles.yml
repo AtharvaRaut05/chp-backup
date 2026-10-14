@@ -1,4 +1,5 @@
-# Uses your "traffic" AWS login. Set LAKE_BUCKET first (see README in this folder).
+# dev: your "traffic" AWS login (set LAKE_BUCKET first, see README in this folder).
+# aws: the scheduled job in AWS, which signs in with its own role (jobs/buildspec.yml).
 traffic:
   target: dev
   outputs:
@@ -6,6 +7,15 @@ traffic:
       type: athena
       region_name: us-west-2
       aws_profile_name: traffic
+      database: awsdatacatalog
+      schema: traffic
+      work_group: traffic
+      s3_staging_dir: "s3://{{ env_var('LAKE_BUCKET') }}/athena-results/dbt/"
+      s3_data_dir: "s3://{{ env_var('LAKE_BUCKET') }}/silver/"
+      threads: 4
+    aws:
+      type: athena
+      region_name: us-west-2
       database: awsdatacatalog
       schema: traffic
       work_group: traffic

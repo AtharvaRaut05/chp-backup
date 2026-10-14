@@ -379,13 +379,13 @@ def query(sql: str, session) -> pd.DataFrame:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--profile", default="traffic")
+    ap.add_argument("--profile", default="traffic", help='AWS login profile; "" = default credentials (the AWS job)')
     ap.add_argument("--seed", type=int, default=0, help="change to see a different random sample")
     ap.add_argument("--open", action="store_true")
     args = ap.parse_args()
 
     import boto3
-    session = boto3.Session(profile_name=args.profile, region_name="us-west-2")
+    session = boto3.Session(profile_name=args.profile or None, region_name="us-west-2")
     labels = add_derived(query(LABELS_SQL, session))
     severity = severity_table(labels)
     sample = pick_sample(labels, seed=args.seed)

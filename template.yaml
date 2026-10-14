@@ -175,6 +175,14 @@ Resources:
         - LambdaInvokePolicy: { FunctionName: !Ref PemsPlanner }
         - LambdaInvokePolicy: { FunctionName: !Ref PemsFetcher }
         - LambdaInvokePolicy: { FunctionName: !Ref PemsReporter }
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow           # run the processing job and wait for it
+              Action: [codebuild:StartBuild, codebuild:StopBuild, codebuild:BatchGetBuilds]
+              Resource: !GetAtt ProcessingJob.Arn
+            - Effect: Allow           # how Step Functions waits for a CodeBuild job to finish
+              Action: [events:PutTargets, events:PutRule, events:DescribeRule]
+              Resource: !Sub arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventForCodeBuildStartBuildRule
       Events:
         Daily:
           Type: ScheduleV2
@@ -185,8 +193,12 @@ Resources:
         PlanFn: !GetAtt PemsPlanner.Arn
         FetchFn: !GetAtt PemsFetcher.Arn
         ReportFn: !GetAtt PemsReporter.Arn
+        JobName: !Ref ProcessingJob
       Definition:
-        Comment: Pull PeMS traffic data only for district-days that had CHP incidents
+        Comment: >
+          Pull PeMS traffic data only for district-days that had CHP incidents, then rebuild the
+          tables (and on Mondays retrain the models and email a report). The rebuild runs even if
+          some downloads failed; the workflow is then marked failed so the alarm emails you.
         StartAt: Plan
         States:
           Plan:
@@ -226,7 +238,102 @@ Resources:
             Resource: arn:aws:states:::lambda:invoke
             Parameters: { FunctionName: "${ReportFn}", Payload.$: "$" }
             OutputPath: $.Payload
+            Catch:
+              - { ErrorEquals: [States.ALL], ResultPath: $.fetch_error, Next: ProcessAfterFetchFailure }
+            Next: Process
+          Process:
+            Type: Task
+            Resource: arn:aws:states:::codebuild:startBuild.sync
+            Parameters: { ProjectName: "${JobName}" }
+            ResultSelector: { build_status.$: $.Build.BuildStatus }
+            Retry:
+              - { ErrorEquals: [States.ALL], IntervalSeconds: 300, MaxAttempts: 1 }
             End: true
+          ProcessAfterFetchFailure:
+            Type: Task
+            Resource: arn:aws:states:::codebuild:startBuild.sync
+            Parameters: { ProjectName: "${JobName}" }
+            ResultSelector: { build_status.$: $.Build.BuildStatus }
+            Catch:
+              - { ErrorEquals: [States.ALL], Next: FetchFailed }
+            Next: FetchFailed
+          FetchFailed:
+            Type: Fail
+            Error: PemsFetchFailed
+            Cause: Some PeMS downloads failed (they are retried tomorrow). The tables were still rebuilt.
+
+  # ---------- scheduled processing: dbt rebuild daily, model report on Mondays ----------
+  ProcessingJobLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/codebuild/${AWS::StackName}-processing
+      RetentionInDays: 30
+
+  ProcessingJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: codebuild.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: processing
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub ${ProcessingJobLogs.Arn}:*
+              - Effect: Allow
+                Action: [s3:GetObject, s3:GetObjectVersion, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub ${Lake.Arn}/*
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !GetAtt Lake.Arn
+              - Effect: Allow
+                Action: [athena:StartQueryExecution, athena:GetQueryExecution, athena:GetQueryResults,
+                         athena:StopQueryExecution, athena:GetWorkGroup, athena:GetDataCatalog,
+                         athena:GetDatabase, athena:GetTableMetadata, athena:ListDatabases, athena:ListTableMetadata]
+                Resource:
+                  - !Sub arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${AthenaWorkGroup}
+                  - !Sub arn:aws:athena:${AWS::Region}:${AWS::AccountId}:datacatalog/AwsDataCatalog
+              - Effect: Allow           # dbt reads bronze and builds the silver tables
+                Action: [glue:GetDatabase, glue:GetDatabases, glue:CreateDatabase, glue:GetTable, glue:GetTables,
+                         glue:CreateTable, glue:UpdateTable, glue:DeleteTable, glue:BatchDeleteTable,
+                         glue:GetPartition, glue:GetPartitions, glue:BatchGetPartition, glue:CreatePartition,
+                         glue:BatchCreatePartition, glue:BatchDeletePartition, glue:DeletePartition]
+                Resource:
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/traffic_*
+                  - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/traffic_*/*
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: !Ref AlertTopic
+
+  ProcessingJob:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub ${AWS::StackName}-processing
+      Description: Rebuild the dbt tables daily; on Mondays retrain the models and email a report
+      ServiceRole: !GetAtt ProcessingJobRole.Arn
+      Source:
+        Type: S3
+        Location: !Sub ${Lake}/jobs/code.zip     # uploaded by scripts/upload_job_code.py
+        BuildSpec: jobs/buildspec.yml
+      Artifacts: { Type: NO_ARTIFACTS }
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
+        EnvironmentVariables:
+          - { Name: LAKE_BUCKET, Value: !Ref Lake }
+          - { Name: ALERT_TOPIC, Value: !Ref AlertTopic }
+          - { Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region }
+      LogsConfig:
+        CloudWatchLogs: { Status: ENABLED, GroupName: !Ref ProcessingJobLogs }
+      TimeoutInMinutes: 60
 
   # ---------- alerts ----------
   AlertTopic:
@@ -273,7 +380,7 @@ Resources:
   WorkflowFailedAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmDescription: Daily PeMS workflow failed - traffic data missing for some district-days
+      AlarmDescription: Daily workflow failed - PeMS data missing for some district-days, or the table rebuild / model report failed
       Namespace: AWS/States
       MetricName: ExecutionsFailed
       Dimensions: [{ Name: StateMachineArn, Value: !Ref DailyTrafficWorkflow }]
@@ -292,3 +399,6 @@ Outputs:
   WorkflowArn:
     Description: Daily PeMS workflow (Step Functions)
     Value: !Ref DailyTrafficWorkflow
+  ProcessingJobName:
+    Description: Scheduled processing job (CodeBuild)
+    Value: !Ref ProcessingJob
