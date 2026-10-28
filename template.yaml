@@ -130,6 +130,27 @@ Resources:
               MaximumRetryAttempts: 0
               MaximumEventAgeInSeconds: 60
 
+  CaltransTravelTimes:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: caltrans.travel_times.main
+      Description: Save Caltrans real-time travel-time files (districts 3, 8, 11, 12) every 5 minutes
+      MemorySize: 256
+      Timeout: 90
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+        MaximumEventAgeInSeconds: 120
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref Lake }
+      Events:
+        Every5Minutes:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(5 minutes)
+            RetryPolicy:
+              MaximumRetryAttempts: 0
+              MaximumEventAgeInSeconds: 120
+
   # ---------- daily PeMS workflow ----------
   PemsPlanner:
     Type: AWS::Serverless::Function
@@ -303,7 +324,10 @@ Resources:
                 Action: [glue:GetDatabase, glue:GetDatabases, glue:CreateDatabase, glue:GetTable, glue:GetTables,
                          glue:CreateTable, glue:UpdateTable, glue:DeleteTable, glue:BatchDeleteTable,
                          glue:GetPartition, glue:GetPartitions, glue:BatchGetPartition, glue:CreatePartition,
-                         glue:BatchCreatePartition, glue:BatchDeletePartition, glue:DeletePartition]
+                         glue:BatchCreatePartition, glue:BatchDeletePartition, glue:DeletePartition,
+                         # replacing a view reads and prunes its old versions
+                         glue:GetTableVersions, glue:GetTableVersion, glue:DeleteTableVersion,
+                         glue:BatchDeleteTableVersion]
                 Resource:
                   - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog
                   - !Sub arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/traffic_*
@@ -375,6 +399,21 @@ Resources:
       Threshold: 30                 # expect ~60 an hour
       ComparisonOperator: LessThanThreshold
       TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopic]
+
+  TravelTimesFailingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Caltrans travel-time collector failing for an hour (feed down or code error)
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref CaltransTravelTimes }]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 10                 # 12 runs an hour; a few misses are fine
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
       AlarmActions: [!Ref AlertTopic]
 
   WorkflowFailedAlarm:

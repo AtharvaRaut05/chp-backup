@@ -19,3 +19,5 @@ sources:
         description: Sensor metadata (location, freeway, postmile), one partition per metadata file.
       - name: pems_pairing
         description: Status log of whether each district-day has PeMS data.
+      - name: weather_hourly
+        description: Hourly rainfall per 0.25-degree grid cell (Open-Meteo), written by jobs/weather.py.

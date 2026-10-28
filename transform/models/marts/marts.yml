@@ -173,6 +173,7 @@ unit_tests:
       a SigAlert note is seen at +25 (CHP's own note time says +2, but we hadn't seen it yet).
       At 10 min: lanes blocked, traffic backed up, 5 min of backup left.
       At 20 min: lanes open, backup over. At 30 min: the SigAlert note now counts.
+      Zone congestion and rain pass through for a (c has none: nulls, not zeros).
       Incident c: backup from 10 min, still going when data ended -> censored at every landmark.
     overrides:
       vars: {landmarks: [10, 20, 30]}
@@ -201,6 +202,12 @@ unit_tests:
       - input: ref('int_incident_recurring')
         rows:
           - {log_id: a, typical_ratio_now: 0.5}
+      - input: ref('int_incident_zone_recurring')
+        rows:
+          - {log_id: a, zone_typical_min_now: 0.4}
+      - input: ref('int_incident_weather')
+        rows:
+          - {log_id: a, rain_last_hour_mm: 1.5}
       - input: ref('int_backup_slots')
         rows:
           - {log_id: a, t: 0, is_slowed: true, is_clear: false, queue_extent_miles: 2.0, min_ratio: 0.5}
@@ -217,12 +224,12 @@ unit_tests:
           - {log_id: c, t: 25, is_slowed: true, is_clear: false, queue_extent_miles: 2.0, min_ratio: 0.5}
     expect:
       rows:
-        - {log_id: a, landmark_min: 10, type_code: "1182", n_notes: 1, blocking_now: true,  max_lanes_blocked: 2, sigalert: false, units_assigned: 1, units_at_scene: 1, first_at_scene_min: 8, chp_closed: false, backed_up_now: true,  slowed_minutes_so_far: 10, remaining_minutes: 5,  is_censored: false}
-        - {log_id: a, landmark_min: 20, type_code: "1181", n_notes: 2, blocking_now: false, max_lanes_blocked: 2, sigalert: false, units_assigned: 1, units_at_scene: 1, first_at_scene_min: 8, chp_closed: false, backed_up_now: false, slowed_minutes_so_far: 15, remaining_minutes: 0,  is_censored: false}
-        - {log_id: a, landmark_min: 30, type_code: "1181", n_notes: 3, blocking_now: false, max_lanes_blocked: 2, sigalert: true,  units_assigned: 1, units_at_scene: 1, first_at_scene_min: 8, chp_closed: true,  backed_up_now: false, slowed_minutes_so_far: 15, remaining_minutes: 0,  is_censored: false}
-        - {log_id: c, landmark_min: 10, type_code: "1183", n_notes: 0, blocking_now: false, max_lanes_blocked: null, sigalert: false, units_assigned: 0, units_at_scene: 0, first_at_scene_min: null, chp_closed: false, backed_up_now: false, slowed_minutes_so_far: 0, remaining_minutes: 30, is_censored: true}
-        - {log_id: c, landmark_min: 20, type_code: "1183", n_notes: 0, blocking_now: false, max_lanes_blocked: null, sigalert: false, units_assigned: 0, units_at_scene: 0, first_at_scene_min: null, chp_closed: false, backed_up_now: true,  slowed_minutes_so_far: 10, remaining_minutes: 20, is_censored: true}
-        - {log_id: c, landmark_min: 30, type_code: "1183", n_notes: 0, blocking_now: false, max_lanes_blocked: null, sigalert: false, units_assigned: 0, units_at_scene: 0, first_at_scene_min: null, chp_closed: false, backed_up_now: true,  slowed_minutes_so_far: 20, remaining_minutes: 10, is_censored: true}
+        - {log_id: a, landmark_min: 10, type_code: "1182", n_notes: 1, blocking_now: true,  max_lanes_blocked: 2, sigalert: false, units_assigned: 1, units_at_scene: 1, first_at_scene_min: 8, chp_closed: false, backed_up_now: true,  slowed_minutes_so_far: 10, remaining_minutes: 5,  is_censored: false, zone_typical_min_now: 0.4, rain_last_hour_mm: 1.5}
+        - {log_id: a, landmark_min: 20, type_code: "1181", n_notes: 2, blocking_now: false, max_lanes_blocked: 2, sigalert: false, units_assigned: 1, units_at_scene: 1, first_at_scene_min: 8, chp_closed: false, backed_up_now: false, slowed_minutes_so_far: 15, remaining_minutes: 0,  is_censored: false, zone_typical_min_now: 0.4, rain_last_hour_mm: 1.5}
+        - {log_id: a, landmark_min: 30, type_code: "1181", n_notes: 3, blocking_now: false, max_lanes_blocked: 2, sigalert: true,  units_assigned: 1, units_at_scene: 1, first_at_scene_min: 8, chp_closed: true,  backed_up_now: false, slowed_minutes_so_far: 15, remaining_minutes: 0,  is_censored: false, zone_typical_min_now: 0.4, rain_last_hour_mm: 1.5}
+        - {log_id: c, landmark_min: 10, type_code: "1183", n_notes: 0, blocking_now: false, max_lanes_blocked: null, sigalert: false, units_assigned: 0, units_at_scene: 0, first_at_scene_min: null, chp_closed: false, backed_up_now: false, slowed_minutes_so_far: 0, remaining_minutes: 30, is_censored: true, zone_typical_min_now: null, rain_last_hour_mm: null}
+        - {log_id: c, landmark_min: 20, type_code: "1183", n_notes: 0, blocking_now: false, max_lanes_blocked: null, sigalert: false, units_assigned: 0, units_at_scene: 0, first_at_scene_min: null, chp_closed: false, backed_up_now: true,  slowed_minutes_so_far: 10, remaining_minutes: 20, is_censored: true, zone_typical_min_now: null, rain_last_hour_mm: null}
+        - {log_id: c, landmark_min: 30, type_code: "1183", n_notes: 0, blocking_now: false, max_lanes_blocked: null, sigalert: false, units_assigned: 0, units_at_scene: 0, first_at_scene_min: null, chp_closed: false, backed_up_now: true,  slowed_minutes_so_far: 20, remaining_minutes: 10, is_censored: true, zone_typical_min_now: null, rain_last_hour_mm: null}
 
   - name: training_landmarks_drop_rows_we_cannot_use
     model: fct_training_landmarks
@@ -254,6 +261,12 @@ unit_tests:
       - input: ref('int_incident_recurring')
         rows:
           - {log_id: zzz, typical_ratio_now: 0.5}
+      - input: ref('int_incident_zone_recurring')
+        rows:
+          - {log_id: zzz, zone_typical_min_now: 0.4}
+      - input: ref('int_incident_weather')
+        rows:
+          - {log_id: zzz, rain_last_hour_mm: 0.0}
       - input: ref('int_backup_slots')
         rows:
           - {log_id: zzz, t: 0, is_slowed: false, is_clear: true, queue_extent_miles: null, min_ratio: 1.0}

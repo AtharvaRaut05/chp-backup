@@ -49,6 +49,18 @@ models:
               arguments:
                 values: [precrash_adjusted, precrash_only]
 
+  - name: int_incident_weather
+    description: Rain at each incident's grid cell in the hours before it was logged.
+    columns:
+      - name: log_id
+        tests: [not_null, unique]
+
+  - name: int_incident_zone_recurring
+    description: Normal congestion along the queue and approach zones (other days' history), one row per incident.
+    columns:
+      - name: log_id
+        tests: [not_null, unique]
+
   - name: int_incident_recurring
     description: Normal congestion at each incident's site sensor now and over the next hour, from other days' history.
     columns:
@@ -243,6 +255,123 @@ unit_tests:
     expect:
       rows:
         - {log_id: x, free_flow_speed: 64.0, typical_ratio_now: 0.5, typical_ratio_in_30: 0.75, typical_ratio_in_60: 0.875, typical_congestion_minutes_left: 90}
+
+  - name: incident_zone_recurring_congestion_along_the_queue
+    model: int_incident_zone_recurring
+    description: >
+      Crash at 7:00 AM on a weekday (slot 84). Queue zone: sensor 2 normally runs 32 / 48 / 56 mph
+      now / in 30 / in 60 min against 64 free flow; sensor 3 always flows freely (60). Approach zone:
+      sensor 4 normally runs at half its free-flow speed now. So the slowest queue sensor is at 50%,
+      75% and 87.5% of free flow, and the approach averages 50%. Sensor 3 has only two OTHER days of
+      history at 7:00 (the third reading is from the crash day itself, which never counts as typical),
+      so it has no typical speed "now": the queue-zone average now is sensor 2's 50% and all of the
+      sensors with history are normally congested. An on-ramp sensor (9) in the queue zone is ignored.
+    given:
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: x, log_time: "2026-10-01 14:00:00", incident_day: "2026-10-01"}
+      - input: ref('int_incident_precrash')
+        rows:
+          - {log_id: x, is_measurable: true}
+      - input: ref('int_incident_stations')
+        rows:
+          - {log_id: x, station_id: 2, station_type: ML, role: queue}
+          - {log_id: x, station_id: 3, station_type: ML, role: queue}
+          - {log_id: x, station_id: 4, station_type: ML, role: approach}
+          - {log_id: x, station_id: 9, station_type: OR, role: queue}
+      - input: ref('int_station_profile')
+        rows:
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 0, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 12, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 84, speed: 32.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 90, speed: 48.0}
+          - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 96, speed: 56.0}
+          - {station_id: 3, dt: "2026-09-28", day_type: weekday, slot: 0, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-28", day_type: weekday, slot: 12, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-28", day_type: weekday, slot: 84, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-28", day_type: weekday, slot: 90, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-28", day_type: weekday, slot: 96, speed: 60.0}
+          - {station_id: 4, dt: "2026-09-28", day_type: weekday, slot: 0, speed: 60.0}
+          - {station_id: 4, dt: "2026-09-28", day_type: weekday, slot: 12, speed: 60.0}
+          - {station_id: 4, dt: "2026-09-28", day_type: weekday, slot: 84, speed: 30.0}
+          - {station_id: 4, dt: "2026-09-28", day_type: weekday, slot: 90, speed: 30.0}
+          - {station_id: 4, dt: "2026-09-28", day_type: weekday, slot: 96, speed: 30.0}
+          - {station_id: 9, dt: "2026-09-28", day_type: weekday, slot: 0, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-28", day_type: weekday, slot: 12, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-28", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-28", day_type: weekday, slot: 90, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-28", day_type: weekday, slot: 96, speed: 5.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 0, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 12, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 84, speed: 32.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 90, speed: 48.0}
+          - {station_id: 2, dt: "2026-09-29", day_type: weekday, slot: 96, speed: 56.0}
+          - {station_id: 3, dt: "2026-09-29", day_type: weekday, slot: 0, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-29", day_type: weekday, slot: 12, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-29", day_type: weekday, slot: 84, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-29", day_type: weekday, slot: 90, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-29", day_type: weekday, slot: 96, speed: 60.0}
+          - {station_id: 4, dt: "2026-09-29", day_type: weekday, slot: 0, speed: 60.0}
+          - {station_id: 4, dt: "2026-09-29", day_type: weekday, slot: 12, speed: 60.0}
+          - {station_id: 4, dt: "2026-09-29", day_type: weekday, slot: 84, speed: 30.0}
+          - {station_id: 4, dt: "2026-09-29", day_type: weekday, slot: 90, speed: 30.0}
+          - {station_id: 4, dt: "2026-09-29", day_type: weekday, slot: 96, speed: 30.0}
+          - {station_id: 9, dt: "2026-09-29", day_type: weekday, slot: 0, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-29", day_type: weekday, slot: 12, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-29", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-29", day_type: weekday, slot: 90, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-29", day_type: weekday, slot: 96, speed: 5.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 0, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 12, speed: 64.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 84, speed: 32.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 90, speed: 48.0}
+          - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 96, speed: 56.0}
+          - {station_id: 3, dt: "2026-09-30", day_type: weekday, slot: 0, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-30", day_type: weekday, slot: 12, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-30", day_type: weekday, slot: 90, speed: 60.0}
+          - {station_id: 3, dt: "2026-09-30", day_type: weekday, slot: 96, speed: 60.0}
+          - {station_id: 4, dt: "2026-09-30", day_type: weekday, slot: 0, speed: 60.0}
+          - {station_id: 4, dt: "2026-09-30", day_type: weekday, slot: 12, speed: 60.0}
+          - {station_id: 4, dt: "2026-09-30", day_type: weekday, slot: 84, speed: 30.0}
+          - {station_id: 4, dt: "2026-09-30", day_type: weekday, slot: 90, speed: 30.0}
+          - {station_id: 4, dt: "2026-09-30", day_type: weekday, slot: 96, speed: 30.0}
+          - {station_id: 9, dt: "2026-09-30", day_type: weekday, slot: 0, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-30", day_type: weekday, slot: 12, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-30", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-30", day_type: weekday, slot: 90, speed: 5.0}
+          - {station_id: 9, dt: "2026-09-30", day_type: weekday, slot: 96, speed: 5.0}
+          - {station_id: 2, dt: "2026-10-01", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 3, dt: "2026-10-01", day_type: weekday, slot: 84, speed: 60.0}
+    expect:
+      rows:
+        - {log_id: x, zone_typical_min_now: 0.5, zone_typical_min_in_30: 0.75, zone_typical_min_in_60: 0.875, zone_typical_mean_now: 0.5, zone_share_congested_now: 1.0, approach_typical_mean_now: 0.5}
+
+  - name: incident_weather_only_finished_hours_before_the_log
+    model: int_incident_weather
+    description: >
+      Logged at 15:40 UTC in the cell (34.25, -118.25). Rain over the hours ending 13:00, 14:00 and
+      15:00 counts toward the last 3 hours (15:00 is the last full hour); 10:00 and 12:00 only toward
+      24 hours. The hour ending 16:00 hadn't finished yet, and the hour ending 15:00 the day before is
+      more than 24 hours back. A neighboring cell's rain doesn't count.
+      y has no weather for its cell: no row (nulls downstream, not zeros).
+    given:
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: x, log_time: "2026-10-01 15:40:00", lat: 34.2, lon: -118.27}
+          - {log_id: y, log_time: "2026-10-01 15:40:00", lat: 36.0, lon: -120.0}
+      - input: ref('stg_weather_hourly')
+        rows:
+          - {grid_lat: 34.25, grid_lon: -118.25, ts: "2026-09-30 15:00:00", precipitation_mm: 9.0}
+          - {grid_lat: 34.25, grid_lon: -118.25, ts: "2026-10-01 10:00:00", precipitation_mm: 2.0}
+          - {grid_lat: 34.25, grid_lon: -118.25, ts: "2026-10-01 12:00:00", precipitation_mm: 0.125}
+          - {grid_lat: 34.25, grid_lon: -118.25, ts: "2026-10-01 13:00:00", precipitation_mm: 1.0}
+          - {grid_lat: 34.25, grid_lon: -118.25, ts: "2026-10-01 14:00:00", precipitation_mm: 0.5}
+          - {grid_lat: 34.25, grid_lon: -118.25, ts: "2026-10-01 15:00:00", precipitation_mm: 0.25}
+          - {grid_lat: 34.25, grid_lon: -118.25, ts: "2026-10-01 16:00:00", precipitation_mm: 7.0}
+          - {grid_lat: 34.0, grid_lon: -118.25, ts: "2026-10-01 15:00:00", precipitation_mm: 5.0}
+    expect:
+      rows:
+        - {log_id: x, rain_last_hour_mm: 0.25, rain_last_3h_mm: 1.75, rain_last_24h_mm: 3.875}
 
   # ---- backup state per slot: queue anchored at the crash, recovery band, stopped traffic ----
   - name: backup_slots_queue_starts_at_the_crash

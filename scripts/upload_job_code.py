@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FOLDERS = ["transform", "ml", "jobs"]
 SKIP_DIRS = {"target", "target_vars", "logs", "data", "output", "__pycache__", ".pytest_cache", "dbt_packages"}
 SKIP_FILES = {".user.yml"}
+SKIP_PATHS = {("ml", "models")}  # saved models live in S3, not in the code bundle
 KEY = "jobs/code.zip"
 
 
@@ -25,7 +26,8 @@ def build_zip(root: Path = ROOT) -> tuple[bytes, list[str]]:
         for folder in FOLDERS:
             for path in sorted((root / folder).rglob("*")):
                 rel = path.relative_to(root)
-                if path.is_dir() or path.name in SKIP_FILES or SKIP_DIRS & set(rel.parts[:-1]):
+                if (path.is_dir() or path.name in SKIP_FILES or SKIP_DIRS & set(rel.parts[:-1])
+                        or rel.parts[:2] in SKIP_PATHS):
                     continue
                 name = rel.as_posix()  # forward slashes, even on Windows
                 z.write(path, name)

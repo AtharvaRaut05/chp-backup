@@ -75,12 +75,30 @@ class Variant:
     rule_keys: list[str]
 
 
+# Same-day sensor readings (before or after the crash). The pipeline gets them a day late, so a model
+# that uses them needs a real-time sensor feed to run live. Everything else is known at the checkpoint:
+# CHP notes from the per-minute poller, the road from sensor metadata, normal congestion from past days.
+SAME_DAY_SENSOR = [
+    "site_speed", "site_occupancy", "site_flow", "site_ratio_to_typical", "site_speed_trend",
+    "queue_speed", "queue_min_speed", "queue_occupancy", "queue_speed_trend",
+    "approach_speed", "approach_flow_per_sensor", "approach_flow_trend",
+    "merge_flow", "connector_merge_flow", "exit_flow", "demand_per_lane", "demand_vs_capacity", *LIVE]
+
 VARIANTS = [
     Variant("with live traffic", FEATURES, SIMPLE_FEATURES + SIMPLE_LIVE,
             ["landmark_min", "backed_up_now", "lanes_group", "type_code"]),
     Variant("CHP + pre-crash only", [f for f in FEATURES if f not in LIVE], SIMPLE_FEATURES,
             ["landmark_min", "lanes_group", "type_code"]),
+    Variant("CHP + history only", [f for f in FEATURES if f not in SAME_DAY_SENSOR],
+            [f for f in SIMPLE_FEATURES if f not in SAME_DAY_SENSOR],
+            ["landmark_min", "lanes_group", "type_code"]),
 ]
+# Newer columns in the training table, tried as features before being adopted (see the README,
+# "Improving the models"). Older cached tables don't have them; prepare() fills them in as missing.
+ZONE = ["zone_typical_min_now", "zone_typical_min_in_30", "zone_typical_min_in_60", "zone_typical_mean_now",
+        "zone_share_congested_now", "approach_typical_mean_now"]
+WEATHER = ["rain_last_hour_mm", "rain_last_3h_mm", "rain_last_24h_mm"]
+OPTIONAL = [*ZONE, *WEATHER]
 MIN_POSITIVE = 10  # backed-up rows needed in each split to fit and score anything meaningful
 RAW_COLUMNS = [c for c in FEATURES if c not in ENGINEERED] + [
     "log_id", "log_time", "day_type", "remaining_minutes", "is_censored"]
@@ -102,8 +120,9 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
         df[c] = df[c].astype("string").astype("category")
     for c in df.columns.difference(list(keep_text)):
         df[c] = pd.to_numeric(df[c].astype("object"), errors="coerce").astype(float)  # bool/Int64 -> float, NA -> nan
-    if "label_adjusted_share" not in df:
-        df["label_adjusted_share"] = np.nan
+    for c in ["label_adjusted_share", *OPTIONAL]:
+        if c not in df:
+            df[c] = np.nan
     return add_engineered(df)
 
 
@@ -135,6 +154,42 @@ def add_engineered(df: pd.DataFrame) -> pd.DataFrame:
         [blocked & (df["lanes_open_share"] == 0), blocked & (df["lanes_blocked_now"] >= 2), blocked],
         ["all", "2+", "1"], default="none")
     return df
+
+
+def drop_duplicate_reports(df: pd.DataFrame, window: str = "30min") -> pd.DataFrame:
+    """Keep one report per crash.
+
+    The same crash is sometimes logged more than once: Freeway Service Patrol tow trucks log their
+    own incidents (log ids containing "FSP"), and CHP occasionally opens a second incident for the
+    same crash. Duplicates sit on the same freeway and direction, within 30 minutes, at the same sensor
+    (identical pre-crash reading, so the same 5-minute slot), and always get the same label. Kept,
+    each such crash counts twice, which overstates how much data there is.
+
+    Each group of duplicates keeps one report: a CHP one over an FSP one, then the earliest.
+    """
+    keys = ["freeway", "direction", "site_speed", "site_flow"]
+    first = df.sort_values("landmark_min").drop_duplicates("log_id")[["log_id", "log_time", *keys]].dropna()
+    pairs = first.merge(first, on=keys, suffixes=("", "_b"))
+    pairs = pairs[(pairs["log_id"] < pairs["log_id_b"])
+                  & ((pairs["log_time"] - pairs["log_time_b"]).abs() <= pd.Timedelta(window))]
+    parent = {}
+
+    def root(x):
+        while parent.get(x, x) != x:
+            x = parent[x]
+        return x
+
+    for a, b in zip(pairs["log_id"], pairs["log_id_b"]):
+        ra, rb = root(a), root(b)
+        if ra != rb:
+            parent[rb] = ra
+    if not parent:
+        return df
+    grouped = first[first["log_id"].isin(set(pairs["log_id"]) | set(pairs["log_id_b"]))].copy()
+    grouped["group"] = grouped["log_id"].map(root)
+    grouped["is_fsp"] = grouped["log_id"].str.contains("FSP", na=False)
+    keep = grouped.sort_values(["is_fsp", "log_time", "log_id"]).drop_duplicates("group")["log_id"]
+    return df[~df["log_id"].isin(set(grouped["log_id"]) - set(keep))]
 
 
 def split_by_day(df: pd.DataFrame, test_share: float = 0.25) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -210,7 +265,9 @@ class Rule:
 
 # ---------- boosted model ----------
 
-CLASSIFIER = dict(learning_rate=0.05, max_depth=4, min_child_weight=5, subsample=0.8,
+# Shallow trees, a slow learning rate and at least 20 rows per leaf: chosen on the development days
+# (before Oct 15) only. With a few thousand incidents, deeper trees fit day-specific noise.
+CLASSIFIER = dict(learning_rate=0.03, max_depth=3, min_child_weight=20, subsample=0.8,
                   colsample_bytree=0.8, enable_categorical=True, tree_method="hist")
 SURVIVAL = {"objective": "survival:aft", "eval_metric": "aft-nloglik", "aft_loss_distribution": "normal",
             "aft_loss_distribution_scale": 1.0, "learning_rate": 0.05, "max_depth": 3,

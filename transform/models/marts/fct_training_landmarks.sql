@@ -177,6 +177,19 @@ select
     r.typical_ratio_in_60,
     r.typical_congestion_minutes_left,
 
+    -- normal congestion along the backup and approach zones (other days' history)
+    z.zone_typical_min_now,
+    z.zone_typical_min_in_30,
+    z.zone_typical_min_in_60,
+    z.zone_typical_mean_now,
+    z.zone_share_congested_now,
+    z.approach_typical_mean_now,
+
+    -- rain at the incident's location before it was logged
+    w.rain_last_hour_mm,
+    w.rain_last_3h_mm,
+    w.rain_last_24h_mm,
+
     -- traffic since the crash, up to the landmark
     t.queue_ratio_now,
     coalesce(t.backed_up_now, false)                                             as backed_up_now,
@@ -201,6 +214,8 @@ join incidents i on i.log_id = lm.log_id
 join labels l on l.log_id = lm.log_id
 join {{ ref('int_incident_precrash') }} p on p.log_id = lm.log_id
 left join {{ ref('int_incident_recurring') }} r on r.log_id = lm.log_id
+left join {{ ref('int_incident_zone_recurring') }} z on z.log_id = lm.log_id
+left join {{ ref('int_incident_weather') }} w on w.log_id = lm.log_id
 left join notes n on n.log_id = lm.log_id and n.landmark_min = lm.landmark_min
 left join units u on u.log_id = lm.log_id and u.landmark_min = lm.landmark_min
 left join live t on t.log_id = lm.log_id and t.landmark_min = lm.landmark_min

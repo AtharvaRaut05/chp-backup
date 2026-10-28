@@ -1,6 +1,7 @@
 # The scheduled job (AWS CodeBuild). The daily workflow starts it after each morning's PeMS download.
-#   every day   rebuild all dbt tables and run their tests
-#   Mondays     also retrain the models, rerun the label audit, save both to
+#   every day   fetch rainfall for new incident days (weather.py), rebuild all dbt tables and run their tests
+#   Mondays     also retrain the models, test them in time order (forward_test.py), replace the current
+#               model only if the retrained one is at least as good (promote.py), rerun the label audit, save all to
 #               s3://<lake bucket>/reports/<date>/ (and reports/latest/), and email a summary
 # Start a full run by hand (see jobs/README.md) with FORCE_REPORT=1.
 version: 0.2
@@ -20,6 +21,7 @@ phases:
     commands:
       - set -eo pipefail
       - python jobs/drop_dbt_tmp.py traffic_silver
+      - python jobs/weather.py || echo "WARNING weather step failed; rain features stay missing until the next run"
       - cd "$CODEBUILD_SRC_DIR/transform"
       - dbt seed --profiles-dir . --target aws
       - dbt build --profiles-dir . --target aws
@@ -29,11 +31,16 @@ phases:
         if [ "$(TZ=America/Los_Angeles date +%u)" = "1" ] || [ "${FORCE_REPORT:-0}" = "1" ]; then
           DAY=$(TZ=America/Los_Angeles date +%F)
           python ml/train.py --refresh --profile "" --boot 200 2>&1 | tee train_output.txt
+          python ml/forward_test.py --profile "" --boot 200 2>&1 | tee forward_output.txt
+          aws s3 sync "s3://$LAKE_BUCKET/models/current/" ml/models/current/ --only-show-errors
+          python ml/promote.py --profile "" 2>&1 | tee promote_output.txt
+          aws s3 sync ml/models/current/ "s3://$LAKE_BUCKET/models/current/" --only-show-errors
+          cat promote_output.txt >> forward_output.txt
           python ml/label_audit.py --profile "" 2>&1 | tee audit_output.txt
-          cp train_output.txt audit_output.txt ml/output/
+          cp train_output.txt forward_output.txt promote_output.txt audit_output.txt ml/output/
           aws s3 sync ml/output "s3://$LAKE_BUCKET/reports/$DAY/" --only-show-errors
           aws s3 sync ml/output "s3://$LAKE_BUCKET/reports/latest/" --delete --only-show-errors
-          python jobs/email_report.py train_output.txt ml/output/label_audit_severity.csv "$DAY"
+          python jobs/email_report.py train_output.txt ml/output/label_audit_severity.csv "$DAY" forward_output.txt
         else
           echo "Not Monday: tables rebuilt, no model report today."
         fi

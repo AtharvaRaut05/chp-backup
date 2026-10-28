@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from backup_model import VARIANTS, BoostedModel, prepare
+from backup_model import VARIANTS, BoostedModel, drop_duplicate_reports, prepare
 from evaluate import by_group, calibration, cross_validate, good_labels, per_day, summary
 
 MIN_DAYS = 3  # days needed for a day-resampled interval to mean anything
@@ -58,7 +58,9 @@ def main() -> None:
     ap.add_argument("--boot", type=int, default=200, help="bootstrap resamples for the 95%% intervals")
     args = ap.parse_args()
 
-    df = prepare(load(args.profile, args.refresh))
+    raw = prepare(load(args.profile, args.refresh))
+    df = drop_duplicate_reports(raw)
+    print(f"dropped {raw['log_id'].nunique() - df['log_id'].nunique():,} duplicate reports of the same crash")
     more = df["remaining_minutes"] > 0
     print(f"{df['log_id'].nunique():,} incidents over {df['incident_day'].nunique()} days "
           f"({df['incident_day'].min()} to {df['incident_day'].max()}), {len(df):,} rows; "
