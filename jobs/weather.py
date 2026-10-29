@@ -26,6 +26,7 @@ import argparse
 import json
 import os
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import date, timedelta
@@ -39,6 +40,9 @@ START = date(2026, 9, 28)            # first day of CHP collection
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"          # recent days (up to ~3 months back)
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"    # older days (reanalysis, a few days' lag)
 ARCHIVE_AFTER_DAYS = 60
+# Open-Meteo counts each location in a request as a call and limits calls per minute (and per day).
+# 50 locations every 6 seconds stays under the per-minute limit; a 429 waits out the minute and retries.
+PAUSE_SECONDS = 6
 COLUMNS = {"grid_lat": "double", "grid_lon": "double", "ts": "timestamp", "precipitation_mm": "double",
            "fetched_at": "timestamp"}
 
@@ -96,16 +100,17 @@ def parse(body: bytes, day: date, cells: list[tuple[float, float]], fetched_at: 
     return out
 
 
-def get(url: str, retries: int = 2) -> bytes:
+def get(url: str, retries: int = 3) -> bytes:
     for attempt in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "chp-backup/0.1 (student traffic research)"})
             with urllib.request.urlopen(req, timeout=60) as resp:
                 return resp.read()
-        except OSError:
+        except OSError as e:  # includes HTTP errors and dropped connections
             if attempt == retries:
                 raise
-            time.sleep(5 * (attempt + 1))
+            too_many = isinstance(e, urllib.error.HTTPError) and e.code == 429
+            time.sleep(65 if too_many else 5 * (attempt + 1))
 
 
 # ---------- AWS ----------
@@ -177,7 +182,9 @@ def main() -> None:
     batches = plan(needed_cells(session), stored_cells(session))
     today = date.today()
     rows, failed = 0, 0
-    for day, cells in batches:
+    for i, (day, cells) in enumerate(batches):
+        if i:
+            time.sleep(PAUSE_SECONDS)
         try:
             df = parse(get(request_url(day, cells, today)), day, cells, pd.Timestamp.now(tz="UTC"))
         except (OSError, ValueError, KeyError) as e:
@@ -186,7 +193,8 @@ def main() -> None:
             continue
         write(df, session, bucket)
         rows += len(df)
-    print(f"weather: {len(batches)} requests, {rows:,} hourly rows written, {failed} failed")
+    print(f"weather: {len(batches)} requests, {rows:,} hourly rows written, {failed} failed"
+          + (" (failed days are fetched again on the next run)" if failed else ""))
 
 
 if __name__ == "__main__":

@@ -56,3 +56,28 @@ def test_parse_handles_a_single_location_and_rejects_a_mismatch():
         pass
     else:
         raise AssertionError("expected a mismatch error")
+
+
+def test_rate_limited_request_waits_and_retries(monkeypatch):
+    import io
+    import urllib.error
+
+    calls, sleeps = [], []
+
+    class Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def urlopen(req, timeout):
+        calls.append(req)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(req.full_url, 429, "Too Many Requests", {}, None)
+        return Resp(b"ok")
+
+    monkeypatch.setattr(weather.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(weather.time, "sleep", sleeps.append)
+    assert weather.get("https://example.test/x") == b"ok"
+    assert sleeps == [65]  # waited out the per-minute limit, then tried again
