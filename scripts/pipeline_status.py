@@ -68,11 +68,13 @@ def collectors(session, hours: int = 6) -> None:
             print(f"  {ts:%m-%d %H:00}  runs {counts['Invocations'].get(ts, 0):>3}  errors {counts['Errors'].get(ts, 0):>3}")
         try:
             events = logs.filter_log_events(logGroupName=f"/aws/lambda/{name}", startTime=int(start.timestamp() * 1000),
-                                            filterPattern="?ERROR ?Error ?Traceback ?Exception ?Task timed out",
+                                            filterPattern='?ERROR ?"Task timed out" ?Traceback ?FeedError',
                                             limit=200)["events"]
         except Exception as e:  # noqa: BLE001
             print(f"  (logs not readable: {str(e)[:120]})")
             continue
+        if not events:
+            print("  no error messages in the logs")
         for e in events[-8:]:
             print(f"  {datetime.fromtimestamp(e['timestamp'] / 1000, timezone.utc):%m-%d %H:%M}  {e['message'].strip()[:300]}")
 

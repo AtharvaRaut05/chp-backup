@@ -12,8 +12,12 @@ missing for those days, and the next run fills them in).
     python jobs/weather.py              # uses the job's AWS role (or the default credentials)
     python jobs/weather.py --profile traffic
 
+    python jobs/weather.py --profile traffic --refetch    # delete everything stored and fetch it again
+
 Stored columns: grid_lat, grid_lon, ts (UTC, end of the hour), precipitation_mm (total over the hour
-ending at ts), dt (Pacific day the row was fetched for; partition).
+ending at ts), fetched_at (when it was downloaded), dt (Pacific day it was fetched for; partition).
+Only hours that had ended when they were downloaded are kept: later hours in the response are
+forecasts. The same hour can be fetched again by a later run; the staging model keeps the newest.
 """
 
 from __future__ import annotations
@@ -35,7 +39,8 @@ START = date(2026, 9, 28)            # first day of CHP collection
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"          # recent days (up to ~3 months back)
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"    # older days (reanalysis, a few days' lag)
 ARCHIVE_AFTER_DAYS = 60
-COLUMNS = {"grid_lat": "double", "grid_lon": "double", "ts": "timestamp", "precipitation_mm": "double"}
+COLUMNS = {"grid_lat": "double", "grid_lon": "double", "ts": "timestamp", "precipitation_mm": "double",
+           "fetched_at": "timestamp"}
 
 
 # ---------- what to fetch ----------
@@ -54,13 +59,14 @@ def plan(needed: pd.DataFrame, have: pd.DataFrame) -> list[tuple[date, list[tupl
 
 
 def request_url(day: date, cells: list[tuple[float, float]], today: date) -> str:
-    """Hourly precipitation in UTC for the Pacific day (which spans two UTC days)."""
+    """Hourly precipitation in UTC covering the Pacific day (07:00 or 08:00 UTC to the same next day)
+    and the 24 hours before it, which the rain_last_24h feature looks back over."""
     base = ARCHIVE_URL if (today - day).days > ARCHIVE_AFTER_DAYS else FORECAST_URL
     params = {
         "latitude": ",".join(f"{lat:.2f}" for lat, _ in cells),
         "longitude": ",".join(f"{lon:.2f}" for _, lon in cells),
         "hourly": "precipitation",
-        "start_date": day.isoformat(),
+        "start_date": (day - timedelta(days=1)).isoformat(),
         "end_date": (day + timedelta(days=1)).isoformat(),
         "timezone": "GMT",
         "timeformat": "unixtime",
@@ -68,8 +74,10 @@ def request_url(day: date, cells: list[tuple[float, float]], today: date) -> str
     return f"{base}?{urllib.parse.urlencode(params)}"
 
 
-def parse(body: bytes, day: date, cells: list[tuple[float, float]]) -> pd.DataFrame:
-    """Open-Meteo returns one object for one location and a list for several, in request order."""
+def parse(body: bytes, day: date, cells: list[tuple[float, float]], fetched_at: pd.Timestamp) -> pd.DataFrame:
+    """Open-Meteo returns one object for one location and a list for several, in request order.
+    Each hourly precipitation value is the total over the PRECEDING hour, so its timestamp is the
+    end of that hour. Hours that hadn't ended at fetched_at are forecasts and are dropped."""
     data = json.loads(body)
     data = data if isinstance(data, list) else [data]
     if len(data) != len(cells):
@@ -77,12 +85,13 @@ def parse(body: bytes, day: date, cells: list[tuple[float, float]]) -> pd.DataFr
     frames = []
     for (lat, lon), loc in zip(cells, data):
         hourly = loc["hourly"]
-        # Open-Meteo stamps each hour with its START; the value is the total over that hour.
-        start = pd.to_datetime(hourly["time"], unit="s", utc=True)
-        frames.append(pd.DataFrame({"grid_lat": lat, "grid_lon": lon, "ts": start + pd.Timedelta(hours=1),
+        frames.append(pd.DataFrame({"grid_lat": lat, "grid_lon": lon,
+                                    "ts": pd.to_datetime(hourly["time"], unit="s", utc=True),
                                     "precipitation_mm": pd.to_numeric(pd.Series(hourly["precipitation"]),
                                                                       errors="coerce")}))
     out = pd.concat(frames, ignore_index=True)
+    out = out[out["ts"] <= fetched_at].copy()
+    out["fetched_at"] = fetched_at
     out["dt"] = day.isoformat()
     return out
 
@@ -135,12 +144,20 @@ def ensure_table(session, bucket: str) -> None:
                                         boto3_session=session)
 
 
+def drop_all(session, bucket: str) -> None:
+    """Delete the stored weather (files and table), so the next fetch starts over."""
+    import awswrangler as wr
+
+    wr.s3.delete_objects(f"s3://{bucket}/bronze/{TABLE}/", boto3_session=session)
+    wr.catalog.delete_table_if_exists(database=DATABASE, table=TABLE, boto3_session=session)
+
+
 def write(df: pd.DataFrame, session, bucket: str) -> None:
     import awswrangler as wr
 
     wr.s3.to_parquet(df=df, path=f"s3://{bucket}/bronze/{TABLE}/", dataset=True, mode="append",
                      database=DATABASE, table=TABLE, partition_cols=["dt"], boto3_session=session,
-                     dtype={"ts": "timestamp"})
+                     dtype={"ts": "timestamp", "fetched_at": "timestamp"})
 
 
 def main() -> None:
@@ -148,18 +165,21 @@ def main() -> None:
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--profile", default="")
+    ap.add_argument("--refetch", action="store_true", help="delete stored weather and fetch everything again")
     args = ap.parse_args()
     session = boto3.Session(profile_name=args.profile or None, region_name="us-west-2")
     bucket = os.environ.get("LAKE_BUCKET") or next(
         o["OutputValue"] for o in session.client("cloudformation").describe_stacks(StackName="chp-backup")
         ["Stacks"][0]["Outputs"] if o["OutputKey"] == "LakeBucket")
+    if args.refetch:
+        drop_all(session, bucket)
     ensure_table(session, bucket)
     batches = plan(needed_cells(session), stored_cells(session))
     today = date.today()
     rows, failed = 0, 0
     for day, cells in batches:
         try:
-            df = parse(get(request_url(day, cells, today)), day, cells)
+            df = parse(get(request_url(day, cells, today)), day, cells, pd.Timestamp.now(tz="UTC"))
         except (OSError, ValueError, KeyError) as e:
             failed += 1
             print(f"WARNING weather for {day} ({len(cells)} cells) not fetched: {str(e)[:200]}")

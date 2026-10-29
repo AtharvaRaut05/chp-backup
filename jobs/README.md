@@ -5,7 +5,7 @@ traffic data, then starts this job (AWS CodeBuild project `chp-backup-processing
 
 | When | What |
 |---|---|
-| Every day | Drops leftover dbt temp tables, then `dbt seed` + `dbt build` (all tables and tests) |
+| Every day | Drops leftover dbt temp tables, fetches hourly rainfall for new incident days (`jobs/weather.py`, skipped with a warning if the weather service is down), then `dbt seed` + `dbt build` (all tables and tests) |
 | Mondays | Also retrains the models (`ml/train.py`), runs the time-ordered test: forward test, alert tradeoff, retraining vs. frozen, failure cases (`ml/forward_test.py`), replaces the stored model in `s3://<lake bucket>/models/current/` only if the retrained one is at least as good on the latest 7 days (`ml/promote.py`), reruns the label audit (`ml/label_audit.py`), saves everything to `s3://<lake bucket>/reports/<date>/` and `reports/latest/`, and emails a summary |
 
 If anything fails, the workflow is marked failed and the alarm emails you (once you've confirmed the alert subscription email). To see where a failure happened, including the error lines from the latest failed run:

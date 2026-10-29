@@ -1,11 +1,11 @@
--- Hourly rainfall per 0.25-degree grid cell. Each fetch covers a Pacific day (two UTC days), so
--- neighboring days overlap: keep one row per cell and hour.
--- ts is the END of the hour; precipitation_mm is the total over the hour before it.
+-- Hourly rainfall per 0.25-degree grid cell. ts is the END of the hour; precipitation_mm is the
+-- total over the hour before it. Neighboring days' fetches overlap and a later run can fetch the
+-- same hour again: keep the newest download of each cell and hour.
 
 select
     grid_lat,
     grid_lon,
     ts,
-    max(precipitation_mm) as precipitation_mm
+    max_by(precipitation_mm, coalesce(fetched_at, timestamp '1970-01-01 00:00:00')) as precipitation_mm
 from {{ source('bronze', 'weather_hourly') }}
 group by grid_lat, grid_lon, ts

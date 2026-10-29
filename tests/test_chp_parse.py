@@ -140,3 +140,45 @@ def test_time_formats(value, expected):
 
 def test_unreadable_time_is_empty_not_a_crash():
     assert _parse_chp_time("sometime soon") is None
+
+
+# ---------- download ----------
+
+def test_cut_off_download_is_retried_and_then_accepted(monkeypatch):
+    import requests
+
+    from chp import fetch
+
+    good = b"<State><Center/></State>"
+    bodies = [good[:15], good]  # first response ends mid-document, second is complete
+
+    class Resp:
+        status_code = 200
+
+        def __init__(self, body):
+            self.content = body
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: Resp(bodies.pop(0)))
+    monkeypatch.setattr(fetch.time, "sleep", lambda s: None)
+    assert fetch.get_feed("http://x") == good
+
+
+def test_feed_that_stays_cut_off_raises(monkeypatch):
+    import pytest
+
+    from chp import fetch
+
+    class Resp:
+        status_code = 200
+        content = b"<State><Center>"
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: Resp())
+    monkeypatch.setattr(fetch.time, "sleep", lambda s: None)
+    with pytest.raises(fetch.FeedError, match="incomplete XML"):
+        fetch.get_feed("http://x")

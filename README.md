@@ -53,7 +53,7 @@ tradeoff, whether retraining helps, and where the model fails.
 | [CHP live incident feed](https://media.chp.ca.gov/sa_xml/sa.xml) | Every open CHP incident statewide: type, location, coordinates, dispatcher notes (lanes blocked, vehicles, ambulance, tow, SigAlert...), and unit events | Polled **every minute**. The feed only shows *current* incidents, so history exists only from when collection started |
 | [Caltrans PeMS](https://pems.dot.ca.gov/) | Speed, flow and occupancy every 5 minutes from thousands of freeway loop detectors, plus sensor locations, lane counts and types (mainline, on/off-ramps, freeway connectors) | Daily files per Caltrans district, downloaded each morning (about a one-day lag) |
 | [Open-Meteo](https://open-meteo.com/) | Hourly rainfall on a 0.25° grid (about 25 km) | Fetched each morning for every grid cell and day with CHP incidents; the first run backfilled from September 29 |
-| [Caltrans travel times](https://cwwp2.dot.ca.gov/documentation/tt/tt.htm) | Current travel time on selected freeway segments in districts 3, 8, 11 and 12, refreshed every 5 minutes | Saved raw **every 5 minutes** since October 28, to build history for a model that runs live (PeMS arrives a day late) |
+| [Caltrans travel times](https://cwwp2.dot.ca.gov/documentation/tt/tt.htm) | Current travel time on selected freeway segments in districts 3, 8, 11 and 12, refreshed every 5 minutes | Saved raw **every 5 minutes** since late October 2026, to build history for a model that runs live (PeMS arrives a day late) |
 
 **Coverage:** the 8 Southern California CHP dispatch centers (Caltrans districts 7, 8, 11 and 12: Los
 Angeles/Ventura, Inland Empire, San Diego, Orange County), plus the Bay Area (district 4) since October
@@ -381,8 +381,8 @@ leave-one-day-out within those days. Scores are AUC.
 
 **Second round, after the tables were rebuilt with the new columns** (same development days and splits;
 the starting point is higher than in the table above because "typical traffic" for each sensor is now
-built from four weeks of other days instead of three, which sharpens both the labels and the
-normal-congestion features for the early days):
+built from four weeks of other days instead of three, which most likely sharpened both the labels and
+the normal-congestion features for the early days):
 
 | Change | History only (time split / leave-one-out) | Pre-crash (time split / leave-one-out) | Kept? |
 |---|---|---|---|
@@ -413,7 +413,8 @@ anyway and cost nothing at prediction time, but they aren't counted as an improv
 **Rain** isn't used yet. Only about 15% of rows had any rain in the previous 24 hours, mostly light, and
 the few rainy incidents backed up *less* often (8% vs. 14%), probably because traffic was already slow
 and the "typical speed" baseline doesn't know it's raining. It needs a real rainy season before it can
-be judged; the pipeline collects it every day. With these inputs the models seem close to their limit; the levers left are more and better
+be judged; the pipeline collects it every day. (These rain numbers used values stamped one hour late, a
+bug since fixed, and will be re-checked once the stored rainfall is fetched again.) With these inputs the models seem close to their limit; the levers left are more and better
 data ([Section 15](#15-limitations-and-whats-next)).
 
 ### Live traffic is detection, not prediction
@@ -626,7 +627,9 @@ brief by design. It's a real effect, not a label error.
 - **Overlapping runs can't corrupt state.** State is one DynamoDB item with an optimistic version
   lock. A slower overlapping run that loses the version check exits cleanly as "superseded".
 - **Defensive parsing.** An error page or empty document returned with HTTP 200 is rejected instead
-  of being read as "every incident closed". One unreadable timestamp doesn't stop a poll.
+  of being read as "every incident closed", and a download cut off mid-document is retried (on
+  October 28 the CHP feed started returning cut-off files for hours). One unreadable timestamp
+  doesn't stop a poll.
 - **Idempotent loads.** PeMS district-days are written with partition overwrite, so retries and
   reprocessing never duplicate rows. A day that parses to zero rows is retried, not marked done.
 - **Automation.** After each morning's download, a CodeBuild job rebuilds every dbt table. On Mondays
@@ -643,7 +646,7 @@ brief by design. It's a real effect, not a label error.
   health by district, and how many incidents each dispatch center loses at each step on the way to a
   label.
 - **Tests.**
-  - **Python:** 112 pytest tests, covering parsing, change detection, PeMS, the models, both
+  - **Python:** 114 pytest tests, covering parsing, change detection, PeMS, the models, both
     evaluations, duplicate removal, model promotion, the rainfall download, the travel-time collector and
     the job scripts.
   - **dbt:** 13 unit tests, built from real CHP notes and real audit cases, plus data tests.
