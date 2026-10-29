@@ -4,6 +4,8 @@
     python scripts/pipeline_status.py --days 21
 
   1. alarms              any CloudWatch alarm currently firing, and whether the alert email is confirmed
+     collectors          runs and errors per hour for the CHP poller and the travel-time collector
+                         over the last 6 hours, with their latest error messages
   2. daily workflow      recent Step Functions runs and the error of any failed one
   3. processing job      recent CodeBuild runs (the dbt rebuild / weekly report)
   4. rows per day        CHP incidents (bronze), PeMS readings (bronze), pairing status,
@@ -40,6 +42,39 @@ def alarms(session) -> None:
             for sub in sns.list_subscriptions_by_topic(TopicArn=topic["TopicArn"])["Subscriptions"]:
                 confirmed = sub["SubscriptionArn"] not in ("PendingConfirmation", "Deleted")
                 print(f"ALERT EMAIL: {sub['Protocol']} subscription {'confirmed' if confirmed else 'NOT CONFIRMED (no emails are sent)'}")
+
+
+def collectors(session, hours: int = 6) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    cfn, cw, logs = session.client("cloudformation"), session.client("cloudwatch"), session.client("logs")
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(hours=hours)
+    for logical in ("ChpPoller", "CaltransTravelTimes"):
+        try:
+            name = cfn.describe_stack_resource(StackName=STACK, LogicalResourceId=logical)[
+                "StackResourceDetail"]["PhysicalResourceId"]
+        except Exception:  # noqa: BLE001  (not deployed yet)
+            print(f"\n{logical}: not deployed")
+            continue
+        counts = {}
+        for metric in ("Invocations", "Errors"):
+            points = cw.get_metric_statistics(Namespace="AWS/Lambda", MetricName=metric, StartTime=start, EndTime=end,
+                                              Period=3600, Statistics=["Sum"],
+                                              Dimensions=[{"Name": "FunctionName", "Value": name}])["Datapoints"]
+            counts[metric] = {p["Timestamp"]: int(p["Sum"]) for p in points}
+        print(f"\n{logical.upper()} (last {hours} hours, UTC)")
+        for ts in sorted(set(counts["Invocations"]) | set(counts["Errors"])):
+            print(f"  {ts:%m-%d %H:00}  runs {counts['Invocations'].get(ts, 0):>3}  errors {counts['Errors'].get(ts, 0):>3}")
+        try:
+            events = logs.filter_log_events(logGroupName=f"/aws/lambda/{name}", startTime=int(start.timestamp() * 1000),
+                                            filterPattern="?ERROR ?Error ?Traceback ?Exception ?Task timed out",
+                                            limit=200)["events"]
+        except Exception as e:  # noqa: BLE001
+            print(f"  (logs not readable: {str(e)[:120]})")
+            continue
+        for e in events[-8:]:
+            print(f"  {datetime.fromtimestamp(e['timestamp'] / 1000, timezone.utc):%m-%d %H:%M}  {e['message'].strip()[:300]}")
 
 
 def workflow(session, arn: str, n: int = 10) -> None:
@@ -168,7 +203,8 @@ def main() -> None:
     buf = io.StringIO()
     with redirect_stdout(buf):
         outputs = stack_outputs(session)
-        for step in (lambda: alarms(session), lambda: workflow(session, outputs["WorkflowArn"]),
+        for step in (lambda: alarms(session), lambda: collectors(session),
+                     lambda: workflow(session, outputs["WorkflowArn"]),
                      lambda: job(session, outputs["ProcessingJobName"]), lambda: per_day(session, args.days),
                      lambda: funnel(session, args.days)):
             try:

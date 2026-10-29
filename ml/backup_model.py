@@ -53,6 +53,9 @@ FEATURES = [
     "merge_flow", "connector_merge_flow", "exit_flow", "merge_points",
     # normal congestion at this spot, from other days' history (int_incident_recurring)
     "typical_ratio_now", "typical_ratio_in_30", "typical_ratio_in_60", "typical_congestion_minutes_left",
+    # ... and along the whole backup and approach zones (int_incident_zone_recurring)
+    "zone_typical_min_now", "zone_typical_min_in_30", "zone_typical_min_in_60", "zone_typical_mean_now",
+    "zone_share_congested_now", "approach_typical_mean_now",
     # built from the above (prepare)
     *ENGINEERED,
     # traffic since the crash
@@ -93,8 +96,9 @@ VARIANTS = [
             [f for f in SIMPLE_FEATURES if f not in SAME_DAY_SENSOR],
             ["landmark_min", "lanes_group", "type_code"]),
 ]
-# Newer columns in the training table, tried as features before being adopted (see the README,
-# "Improving the models"). Older cached tables don't have them; prepare() fills them in as missing.
+# Newer columns in the training table. Older cached tables don't have them; prepare() fills them in
+# as missing. ZONE is in FEATURES (it helped on the development days); WEATHER is collected but not
+# used yet: with few rainy days it didn't help (see the README, "Improving the models").
 ZONE = ["zone_typical_min_now", "zone_typical_min_in_30", "zone_typical_min_in_60", "zone_typical_mean_now",
         "zone_share_congested_now", "approach_typical_mean_now"]
 WEATHER = ["rain_last_hour_mm", "rain_last_3h_mm", "rain_last_24h_mm"]
@@ -108,7 +112,7 @@ RAW_COLUMNS = [c for c in FEATURES if c not in ENGINEERED] + [
 
 def prepare(df: pd.DataFrame) -> pd.DataFrame:
     """Typed copy with the incident's Pacific date, engineered features and a lanes bucket for the rule."""
-    missing = set(RAW_COLUMNS) - set(df.columns)
+    missing = set(RAW_COLUMNS) - set(df.columns) - set(OPTIONAL)
     if missing:
         raise ValueError(f"training table is missing columns: {sorted(missing)}")
     df = df.copy()

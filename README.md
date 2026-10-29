@@ -52,6 +52,8 @@ tradeoff, whether retraining helps, and where the model fails.
 |---|---|---|
 | [CHP live incident feed](https://media.chp.ca.gov/sa_xml/sa.xml) | Every open CHP incident statewide: type, location, coordinates, dispatcher notes (lanes blocked, vehicles, ambulance, tow, SigAlert...), and unit events | Polled **every minute**. The feed only shows *current* incidents, so history exists only from when collection started |
 | [Caltrans PeMS](https://pems.dot.ca.gov/) | Speed, flow and occupancy every 5 minutes from thousands of freeway loop detectors, plus sensor locations, lane counts and types (mainline, on/off-ramps, freeway connectors) | Daily files per Caltrans district, downloaded each morning (about a one-day lag) |
+| [Open-Meteo](https://open-meteo.com/) | Hourly rainfall on a 0.25° grid (about 25 km) | Fetched each morning for every grid cell and day with CHP incidents; the first run backfilled from September 29 |
+| [Caltrans travel times](https://cwwp2.dot.ca.gov/documentation/tt/tt.htm) | Current travel time on selected freeway segments in districts 3, 8, 11 and 12, refreshed every 5 minutes | Saved raw **every 5 minutes** since October 28, to build history for a model that runs live (PeMS arrives a day late) |
 
 **Coverage:** the 8 Southern California CHP dispatch centers (Caltrans districts 7, 8, 11 and 12: Los
 Angeles/Ventura, Inland Empire, San Diego, Orange County), plus the Bay Area (district 4) since October
@@ -89,6 +91,7 @@ flowchart LR
     Poller -->|change detection| DDB[("DynamoDB state")]
     Poller --> Raw[("S3 raw")]
     Poller --> Bronze[("S3 bronze Parquet + Glue catalog")]
+    TT["Caltrans travel times"] -->|every 5 minutes| TTL["Lambda: travel-time collector"] --> Raw
 
     Sched["EventBridge, 10 AM daily"] --> SF["Step Functions workflow"]
     SF --> Plan["Lambda: plan"]
@@ -97,6 +100,8 @@ flowchart LR
     Fetch --> Bronze
     Fetch --> Pair[("DynamoDB pairing")]
     SF --> Job["CodeBuild job"]
+    Meteo["Open-Meteo rainfall"] --> Job
+    Job -->|new incident days| Bronze
     Job -->|dbt on Athena| Silver[("S3 silver tables")]
     Job -->|Mondays| Report["Training, time-ordered test, label audit, report + email"]
 
@@ -106,7 +111,7 @@ flowchart LR
 
 | Layer | Tech |
 |---|---|
-| Ingestion | Python 3.14 Lambdas (requests, pandas, awswrangler), EventBridge Scheduler |
+| Ingestion | Python 3.14 Lambdas (requests, pandas, awswrangler), EventBridge Scheduler, Open-Meteo weather API |
 | Orchestration | Step Functions (plan -> fetch each district-day -> report -> process) |
 | Storage | S3 data lake (raw / bronze / silver), Parquet, Glue Data Catalog, DynamoDB |
 | Transformation | dbt (dbt-athena) on Amazon Athena (Trino SQL), with unit tests and data tests |
@@ -203,6 +208,8 @@ just in the historical table, so the models are trained on three feature sets.
 | Time | hour, day of week, rush hour, weekend | **Yes** | ✓ | ✓ | ✓ |
 | The road | lanes at the crash site and upstream, merge points, sensors in the queue zone | **Yes**, sensor metadata changes rarely | ✓ | ✓ | ✓ |
 | Normal congestion at this spot | how slow it usually is now, in 30 and in 60 minutes, minutes until it usually flows freely | **Yes**, from earlier days | ✓ | ✓ | ✓ |
+| Normal congestion along the backup zone | slowest sensor 0–5 miles back now / in 30 / in 60 minutes, zone average, share of the zone normally jammed, average 5–10 miles back | **Yes**, from earlier days | ✓ | ✓ | ✓ |
+| Rain *(collected, not a model input yet)* | rain in the last 1, 3 and 24 full hours at the incident's grid cell | **Yes**, hourly weather is published in real time | | | |
 | Traffic before the crash | speed, occupancy and flow at the site and across the queue zone, their 15-minute trend, traffic arriving from upstream, on-ramp / connector / off-ramp volume, **demand vs. capacity left** (vehicles arriving ÷ what the open lanes carry at about 2,000 vehicles/hour/lane) | **Only with a real-time sensor feed.** This pipeline gets PeMS files the next morning | | ✓ | ✓ |
 | Traffic since the crash | how slow it is now, whether it's backed up, how far back it reaches, minutes slowed so far | **Only with a real-time sensor feed** | | | ✓ |
 
@@ -372,6 +379,18 @@ leave-one-day-out within those days. Scores are AUC.
 | CatBoost instead of XGBoost | 0.700 / 0.691 | 0.760 / 0.728 | no |
 | Dropping weak features (day of week, unit counts, sensor counts) | within ±0.005 | | no |
 
+**Second round, after the tables were rebuilt with the new columns** (same development days and splits;
+the starting point is higher than in the table above because "typical traffic" for each sensor is now
+built from four weeks of other days instead of three, which sharpens both the labels and the
+normal-congestion features for the early days):
+
+| Change | History only (time split / leave-one-out) | Pre-crash (time split / leave-one-out) | Kept? |
+|---|---|---|---|
+| Starting point | 0.707 / 0.706 | 0.755 / 0.755 | |
+| **+ normal congestion along the whole backup zone** | **0.716 / 0.719** | **0.761 / 0.763** | **yes** |
+| + rain in the last 1, 3 and 24 hours | 0.707 / 0.713 | 0.759 / 0.755 | not yet |
+| + both | 0.708 / 0.719 | 0.760 / 0.764 | |
+
 Only changes that helped on both splits were kept. The CHP text was the most promising idea and the
 most disappointing: some words do matter on their own (debris: 8% backed up vs. 14%; injuries: 20% vs.
 13%), but the model already gets that from incident type, vehicles and ambulance.
@@ -384,7 +403,17 @@ most disappointing: some words do matter on their own (debris: 8% backed up vs. 
 | Pre-crash | 0.765 | 0.772 | +0.007 (0.000 to +0.023) | +0.11 (+0.09 to +0.12) |
 
 The improvement is real but small. Removing duplicates mostly made the numbers more honest rather than
-higher. With these inputs the models seem close to their limit; the levers left are more and better
+higher.
+
+**The zone features on the latest week** (trained before October 21, tested October 21–27): history only
+0.736 → 0.737 (+0.001, −0.010 to +0.012); pre-crash 0.782 → 0.782. They helped on the development days
+but make no measurable difference on the newest week. They stay in the models because they're computed
+anyway and cost nothing at prediction time, but they aren't counted as an improvement.
+
+**Rain** isn't used yet. Only about 15% of rows had any rain in the previous 24 hours, mostly light, and
+the few rainy incidents backed up *less* often (8% vs. 14%), probably because traffic was already slow
+and the "typical speed" baseline doesn't know it's raining. It needs a real rainy season before it can
+be judged; the pipeline collects it every day. With these inputs the models seem close to their limit; the levers left are more and better
 data ([Section 15](#15-limitations-and-whats-next)).
 
 ### Live traffic is detection, not prediction
@@ -606,15 +635,18 @@ brief by design. It's a real effect, not a label error.
   label audit, saves everything to S3 and emails a summary. It first
   removes leftover temporary tables from failed dbt runs, so one failure can't block the next day.
 - **Monitoring.** Alarms email on poller errors, on the poller stopping (fewer than 30 runs an hour),
+  on the travel-time collector failing for an hour,
   and on any failed daily workflow. `scripts/pipeline_status.py` prints one report covering every
-  stage: firing alarms, whether the alert email is confirmed, recent workflow and job runs with the
+  stage: firing alarms, whether the alert email is confirmed, runs and errors per hour for both
+  collectors with their latest error messages, recent workflow and job runs with the
   error from the latest failure, row counts per day from raw incidents through training rows, sensor
   health by district, and how many incidents each dispatch center loses at each step on the way to a
   label.
 - **Tests.**
-  - **Python:** 104 pytest tests, covering parsing, change detection, PeMS, the models, both
-    evaluations, duplicate removal, model promotion and the job scripts.
-  - **dbt:** 11 unit tests, built from real CHP notes and real audit cases, plus 33 data tests.
+  - **Python:** 112 pytest tests, covering parsing, change detection, PeMS, the models, both
+    evaluations, duplicate removal, model promotion, the rainfall download, the travel-time collector and
+    the job scripts.
+  - **dbt:** 13 unit tests, built from real CHP notes and real audit cases, plus data tests.
   - **Mutation testing:** key label rules were checked by breaking each one on purpose and confirming
     a test fails.
 
@@ -649,8 +681,10 @@ and the daily job has run cleanly every day since.
 **What's next:**
 - **Real-time sensor data,** which turns the pre-crash model (0.78) into something deployable. This is
   the largest available gain, bigger than everything in [Improving the models](#improving-the-models).
-- **Typical traffic along the whole backup zone,** not just at the crash site. Today's history
-  features describe one sensor; a normally congested stretch a mile back may matter as much.
+- **Use the Caltrans travel times** once there are a few weeks of them: a live "how slow is it right
+  now" signal for San Diego, Orange County and the Inland Empire.
+- **Rain, after the rainy season starts:** both as a model input and in the label's "expected speed",
+  which today doesn't know it's raining.
 - **Does backup end track CHP closure?** If it does, clearance time drives duration, which would
   explain why duration is hard to predict early. CHP closure time could become a second target.
 - **Location history:** with months of data, how long backups at *this* spot usually take.
@@ -663,12 +697,13 @@ and the daily job has run cleanly every day since.
 src/                 Lambda code
   chp/               feed download, parsing, change detection, poller handler
   pems/              PeMS client, file parsing, pairing, daily planning/reporting
+  caltrans/          real-time travel-time collector
   common/            settings, S3/Glue helpers
 transform/           dbt project (staging -> intermediate -> marts), unit tests in the .yml files
 ml/                  models (backup_model.py, simple_models.py), leave-one-day-out evaluation
                      (evaluate.py, train.py), time-ordered evaluation (forward_test.py), model
                      promotion (promote.py), label audit
-jobs/                the scheduled processing job (CodeBuild buildspec and helper scripts)
+jobs/                the scheduled processing job (CodeBuild buildspec, rainfall download, helper scripts)
 scripts/             pipeline health report, upload the job code, reprocess PeMS files, list dispatch centers
 tests/               pytest suite (fixtures include a real CHP feed snapshot)
 template.yaml        all AWS infrastructure (SAM)

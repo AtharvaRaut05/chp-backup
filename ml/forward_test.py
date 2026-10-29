@@ -271,8 +271,9 @@ def failure_cases(test: pd.DataFrame, pred: pd.DataFrame, threshold: float, meth
     outcome = np.select([more & alert, more & ~alert, ~more & alert], ["caught", "missed", "false alarm"],
                         "correct no-alert")
     flags = pd.DataFrame({name: f(first).astype(bool) for name, f in FLAGS.items()}, index=first.index)
-    table = flags.groupby(outcome).mean().T[["caught", "missed", "false alarm", "correct no-alert"]]
-    table.loc["incidents"] = pd.Series(outcome).value_counts()
+    order = ["caught", "missed", "false alarm", "correct no-alert"]
+    table = flags.groupby(outcome).mean().T.reindex(columns=order)  # an outcome can be absent in a small test
+    table.loc["incidents"] = pd.Series(outcome).value_counts().reindex(order).fillna(0)
     table.loc["median backup minutes"] = (first.assign(o=outcome).loc[more]
                                           .groupby("o")["total_backup_minutes"].median()
                                           if "total_backup_minutes" in first else np.nan)
