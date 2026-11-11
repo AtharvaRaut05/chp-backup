@@ -55,6 +55,24 @@ models:
       - name: log_id
         tests: [not_null, unique]
 
+  - name: int_incident_lane_closures
+    description: Caltrans lane closures in place at each incident's place and time (null before collection started).
+    columns:
+      - name: log_id
+        tests: [not_null, unique]
+
+  - name: int_incident_live_speed
+    description: Speed at the crash when it was reported (TomTom lookup), kept only when it landed on the right freeway carriageway.
+    columns:
+      - name: log_id
+        tests: [not_null, unique]
+
+  - name: int_incident_calendar
+    description: Holidays, long weekends, getaway days, winter break, clock changes, darkness and low sun in the driver's eyes at each incident.
+    columns:
+      - name: log_id
+        tests: [not_null, unique]
+
   - name: int_incident_zone_recurring
     description: Normal congestion along the queue and approach zones (other days' history), one row per incident.
     columns:
@@ -209,7 +227,8 @@ unit_tests:
       Crash at 7:00 AM on a weekday (slot 84) at sensor 2. On three other weekdays the sensor
       runs 32 mph at 7:00, 48 at 7:30, 56 at 8:00, 60 at 8:30 and 64 at night (free flow).
       So: 50% of free flow now, 75% in 30 min, 87.5% in 60 min, back above 90% at 8:30 (90 min).
-      The crash day itself (5 mph) and a weekend day (20 mph) must not count.
+      The crash day itself (5 mph), later days (5 mph: not known yet at the crash) and a weekend day
+      (20 mph) must not count.
     given:
       - input: ref('stg_chp_incidents')
         rows:
@@ -244,6 +263,10 @@ unit_tests:
           - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 96, speed: 56.0}
           - {station_id: 2, dt: "2026-09-30", day_type: weekday, slot: 102, speed: 60.0}
           - {station_id: 2, dt: "2026-10-01", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 2, dt: "2026-10-02", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 2, dt: "2026-10-05", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 2, dt: "2026-10-06", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 2, dt: "2026-10-07", day_type: weekday, slot: 84, speed: 5.0}
           - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 0, speed: 20.0}
           - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 12, speed: 20.0}
           - {station_id: 2, dt: "2026-09-27", day_type: weekend, slot: 24, speed: 20.0}
@@ -265,7 +288,8 @@ unit_tests:
       75% and 87.5% of free flow, and the approach averages 50%. Sensor 3 has only two OTHER days of
       history at 7:00 (the third reading is from the crash day itself, which never counts as typical),
       so it has no typical speed "now": the queue-zone average now is sensor 2's 50% and all of the
-      sensors with history are normally congested. An on-ramp sensor (9) in the queue zone is ignored.
+      sensors with history are normally congested. Sensor 2's later days (5 mph) aren't known at the
+      crash and don't count. An on-ramp sensor (9) in the queue zone is ignored.
     given:
       - input: ref('stg_chp_incidents')
         rows:
@@ -281,6 +305,10 @@ unit_tests:
           - {log_id: x, station_id: 9, station_type: OR, role: queue}
       - input: ref('int_station_profile')
         rows:
+          - {station_id: 2, dt: "2026-10-02", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 2, dt: "2026-10-05", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 2, dt: "2026-10-06", day_type: weekday, slot: 84, speed: 5.0}
+          - {station_id: 2, dt: "2026-10-07", day_type: weekday, slot: 84, speed: 5.0}
           - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 0, speed: 64.0}
           - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 12, speed: 64.0}
           - {station_id: 2, dt: "2026-09-28", day_type: weekday, slot: 84, speed: 32.0}
@@ -467,3 +495,90 @@ unit_tests:
         - {log_id: b, detail_seq: 6, vehicles: 2, overturned: false, tow: false, ambulance: false, sigalert: false, type_changed_to: null}
         - {log_id: b, detail_seq: 7, vehicles: null, overturned: false, tow: false, ambulance: false, sigalert: true, type_changed_to: null}
         - {log_id: b, detail_seq: 8, vehicles: null, overturned: false, tow: false, ambulance: false, sigalert: false, type_changed_to: "1182"}
+
+  # ---- new context sources: lane closures, live speed, calendar ----
+  - name: lane_closures_in_place_same_road_and_direction
+    model: int_incident_lane_closures
+    description: >
+      A 2-lane closure on I-405 northbound from 34.00 to 34.02, in place 10:00-14:00.
+      x: northbound inside it at 12:00 -> nearby, 2 lanes. y: same spot, southbound -> not nearby.
+      v: northbound 5 km past the end -> not nearby. u: northbound at 15:00, after it ended -> not nearby.
+      w: under a planned closure whose start was never confirmed -> planned only.
+      z: logged before the feed was being saved -> nulls, not zeros.
+    given:
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: x, log_time: "2026-10-01 12:00:00", is_traffic: true, freeway: 405, direction: N, lat: 34.01, lon: -118.4005}
+          - {log_id: y, log_time: "2026-10-01 12:00:00", is_traffic: true, freeway: 405, direction: S, lat: 34.01, lon: -118.4005}
+          - {log_id: v, log_time: "2026-10-01 12:00:00", is_traffic: true, freeway: 405, direction: N, lat: 34.065, lon: -118.4}
+          - {log_id: u, log_time: "2026-10-01 15:00:00", is_traffic: true, freeway: 405, direction: N, lat: 34.01, lon: -118.4005}
+          - {log_id: w, log_time: "2026-10-01 12:00:00", is_traffic: true, freeway: 5, direction: S, lat: 33.80, lon: -117.90}
+          - {log_id: z, log_time: "2026-09-01 12:00:00", is_traffic: true, freeway: 405, direction: N, lat: 34.01, lon: -118.4005}
+      - input: ref('stg_lane_closures')
+        rows:
+          - {closure_key: k1, route_number: 405, direction_letter: N, begin_lat: 34.00, begin_lon: -118.40, end_lat: 34.02, end_lon: -118.40, lanes_closed: 2, closure_type: Lane, started_at: "2026-10-01 10:00:00", active_to: "2026-10-01 14:00:00", cancelled_at: null, planned_start: "2026-10-01 09:00:00", planned_end: "2026-10-01 15:00:00", first_seen: "2026-09-30 08:00:00", last_seen: "2026-10-01 20:00:00"}
+          - {closure_key: k2, route_number: 5, direction_letter: S, begin_lat: 33.79, begin_lon: -117.90, end_lat: 33.81, end_lon: -117.90, lanes_closed: 1, closure_type: Lane, started_at: null, active_to: "2026-10-01 20:00:00", cancelled_at: null, planned_start: "2026-10-01 11:00:00", planned_end: "2026-10-01 13:00:00", first_seen: "2026-09-30 08:00:00", last_seen: "2026-10-01 20:00:00"}
+    expect:
+      rows:
+        - {log_id: x, closure_nearby: true,  closure_lanes_closed: 2,    closure_full: false, planned_closure_nearby: false}
+        - {log_id: y, closure_nearby: false, closure_lanes_closed: 0,    closure_full: false, planned_closure_nearby: false}
+        - {log_id: v, closure_nearby: false, closure_lanes_closed: 0,    closure_full: false, planned_closure_nearby: false}
+        - {log_id: u, closure_nearby: false, closure_lanes_closed: 0,    closure_full: false, planned_closure_nearby: false}
+        - {log_id: w, closure_nearby: false, closure_lanes_closed: 0,    closure_full: false, planned_closure_nearby: true}
+        - {log_id: z, closure_nearby: null,  closure_lanes_closed: null, closure_full: null,  planned_closure_nearby: null}
+
+  - name: live_speed_only_on_the_right_carriageway
+    model: int_incident_live_speed
+    description: >
+      x: northbound, the lookup landed on a freeway segment heading 10 degrees -> kept (half of free-flow speed).
+      y: northbound, but the segment heads 190 degrees (the southbound side) -> nulls.
+      z: the lookup landed on a local road (FRC3) -> nulls.
+    given:
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: x, direction: N}
+          - {log_id: y, direction: N}
+          - {log_id: z, direction: E}
+      - input: ref('stg_tomtom_flow')
+        rows:
+          - {log_id: x, requested_at: "2026-10-01 12:02:00", frc: FRC0, current_speed_kmh: 50.0, free_flow_speed_kmh: 100.0, confidence: 0.9, road_closure: false, segment_bearing_deg: 10.0}
+          - {log_id: y, requested_at: "2026-10-01 12:02:00", frc: FRC0, current_speed_kmh: 90.0, free_flow_speed_kmh: 100.0, confidence: 0.9, road_closure: false, segment_bearing_deg: 190.0}
+          - {log_id: z, requested_at: "2026-10-01 12:02:00", frc: FRC3, current_speed_kmh: 30.0, free_flow_speed_kmh: 50.0, confidence: 0.9, road_closure: false, segment_bearing_deg: 90.0}
+    expect:
+      rows:
+        - {log_id: x, live_speed_ratio: 0.5,  live_speed_kmh: 50.0, live_road_closed: false}
+        - {log_id: y, live_speed_ratio: null, live_speed_kmh: null, live_road_closed: null}
+        - {log_id: z, live_speed_ratio: null, live_speed_kmh: null, live_road_closed: null}
+
+  - name: calendar_holidays_darkness_and_glare
+    model: int_incident_calendar
+    description: >
+      Downtown LA. a: noon on Columbus Day, northbound -> holiday, long weekend, daylight, sun high (no glare).
+      b: 8 AM the next day, on a road heading 110 degrees (east-southeast, toward the low morning sun)
+      -> near a holiday, glare. d: same time heading 290 degrees, away from the sun -> no glare.
+      c: 9 PM on an ordinary Wednesday -> dark, nothing else.
+      e: the getaway day before Thanksgiving.
+    given:
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: a, log_time: "2026-10-12 19:00:00", incident_day: "2026-10-12", is_traffic: true, direction: N, lat: 34.05, lon: -118.25}
+          - {log_id: b, log_time: "2026-10-13 15:00:00", incident_day: "2026-10-13", is_traffic: true, direction: E, lat: 34.05, lon: -118.25}
+          - {log_id: c, log_time: "2026-10-15 04:00:00", incident_day: "2026-10-14", is_traffic: true, direction: N, lat: 34.05, lon: -118.25}
+          - {log_id: d, log_time: "2026-10-13 15:00:00", incident_day: "2026-10-13", is_traffic: true, direction: W, lat: 34.05, lon: -118.25}
+          - {log_id: e, log_time: "2026-11-25 23:00:00", incident_day: "2026-11-25", is_traffic: true, direction: N, lat: 34.05, lon: -118.25}
+      - input: ref('stg_road_layout')
+        rows:
+          - {log_id: b, road_heading_deg: 110.0}
+          - {log_id: d, road_heading_deg: 290.0}
+      - input: ref('calendar_days')
+        rows:
+          - {day: "2026-10-12", name: Columbus Day, kind: holiday}
+          - {day: "2026-10-12", name: Columbus Day, kind: long_weekend}
+          - {day: "2026-11-25", name: Before Thanksgiving, kind: getaway_day}
+    expect:
+      rows:
+        - {log_id: a, is_holiday: true,  near_holiday: false, long_weekend: true,  getaway_day: false, is_dark: false, sun_glare: false}
+        - {log_id: b, is_holiday: false, near_holiday: true,  long_weekend: false, getaway_day: false, is_dark: false, sun_glare: true}
+        - {log_id: c, is_holiday: false, near_holiday: false, long_weekend: false, getaway_day: false, is_dark: true,  sun_glare: false}
+        - {log_id: d, is_holiday: false, near_holiday: true,  long_weekend: false, getaway_day: false, is_dark: false, sun_glare: false}
+        - {log_id: e, is_holiday: false, near_holiday: false, long_weekend: false, getaway_day: true,  is_dark: false, sun_glare: false}

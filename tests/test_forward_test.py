@@ -137,3 +137,22 @@ def test_challenger_only_replaces_a_better_champion(long_data, tmp_path, monkeyp
     row = promote.decide(long_data, "CHP + history only", tmp_path / "m")
     assert row["decision"] == "promote" and "difference" in row
     assert promote.load(tmp_path / "m")[1]["trained_through"] == str(days[-1])
+
+
+def test_feature_check_compares_a_group_only_where_it_exists():
+    import numpy as np
+
+    from backup_model import drop_duplicate_reports, prepare
+    from conftest import fake_landmarks
+    from feature_check import compare, covered, day_folds
+
+    df = drop_duplicate_reports(prepare(fake_landmarks(n_incidents=900, days=8)))
+    rng = np.random.default_rng(0)
+    df["helpful"] = np.where(df["remaining_minutes"] > 0, 1.0, 0.0) + rng.normal(0, 0.5, len(df))
+    df.loc[df["incident_day"] == df["incident_day"].min(), "helpful"] = np.nan   # not collected yet on day 1
+    part = covered(df, ["helpful"])
+    assert part["incident_day"].nunique() == df["incident_day"].nunique() - 1
+    out = compare(part, ["landmark_min", "hour_local"], ["helpful"], n_boot=50)
+    assert out["gain"] > 0.1 and out["note"] == "helps"
+    assert compare(part.head(0), ["landmark_min"], ["helpful"])["note"] == "not enough data yet"
+    assert day_folds([1, 2, 3, 4, 5, 6, 7], 3) == [[1, 4, 7], [2, 5], [3, 6]]

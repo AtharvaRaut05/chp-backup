@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: CHP incident poller + daily PeMS traffic workflow
+Description: CHP incident poller, Caltrans and live-speed collectors, daily PeMS traffic workflow
 
 Parameters:
   PandasLayerArn:
@@ -103,7 +103,7 @@ Resources:
       State: ENABLED
       WorkGroupConfiguration:
         EnforceWorkGroupConfiguration: true
-        BytesScannedCutoffPerQuery: 10737418240   # 10 GB cap per query (~5 cents)
+        BytesScannedCutoffPerQuery: 107374182400  # 100 GB cap per query (months of PeMS history are read daily)
         ResultConfiguration:
           OutputLocation: !Sub s3://${Lake}/athena-results/
 
@@ -117,10 +117,14 @@ Resources:
       EventInvokeConfig:            # a failed poll is not retried; the next minute's poll replaces it
         MaximumRetryAttempts: 0
         MaximumEventAgeInSeconds: 60
+      Environment:
+        Variables:
+          SPEED_LOOKUP_FUNCTION: !Ref SpeedLookup
       Policies:
         - S3CrudPolicy: { BucketName: !Ref Lake }
         - DynamoDBCrudPolicy: { TableName: !Ref ChpState }
         - !Ref GlueAccessPolicy
+        - LambdaInvokePolicy: { FunctionName: !Ref SpeedLookup }
       Events:
         EveryMinute:
           Type: ScheduleV2
@@ -150,6 +154,46 @@ Resources:
             RetryPolicy:
               MaximumRetryAttempts: 0
               MaximumEventAgeInSeconds: 120
+
+  CaltransLaneClosures:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: caltrans.lane_closures.main
+      Description: Save the Caltrans lane closure feed (districts 7, 8, 11, 12) every 5 minutes
+      MemorySize: 256
+      Timeout: 90
+      EventInvokeConfig:
+        MaximumRetryAttempts: 0
+        MaximumEventAgeInSeconds: 120
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref Lake }
+      Events:
+        Every5Minutes:
+          Type: ScheduleV2
+          Properties:
+            ScheduleExpression: rate(5 minutes)
+            RetryPolicy:
+              MaximumRetryAttempts: 0
+              MaximumEventAgeInSeconds: 120
+
+  SpeedLookup:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: tomtom.speed_lookup.main
+      Description: Live speed (TomTom) at each new freeway incident, called by the CHP poller
+      MemorySize: 512
+      Timeout: 300                  # usually a handful of lookups; room for a burst
+      Environment:
+        Variables:
+          TOMTOM_DAILY_CAP: "600"     # 600 x 31 days stays under the free 20,000 requests a month
+      EventInvokeConfig:              # a lookup is only useful right away: don't retry
+        MaximumRetryAttempts: 0
+        MaximumEventAgeInSeconds: 300
+      Policies:
+        - S3CrudPolicy: { BucketName: !Ref Lake }
+        - DynamoDBCrudPolicy: { TableName: !Ref ChpState }   # the daily request counter
+        - SSMParameterReadPolicy: { ParameterName: traffic/tomtom/* }
+        - !Ref GlueAccessPolicy
 
   # ---------- daily PeMS workflow ----------
   PemsPlanner:
@@ -283,6 +327,47 @@ Resources:
             Error: PemsFetchFailed
             Cause: Some PeMS downloads failed (they are retried tomorrow). The tables were still rebuilt.
 
+  # ---------- one-off: PeMS sensor data for past days (scripts/backfill_pems.py starts it) ----------
+  PemsBackfillWorkflow:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Policies:
+        - LambdaInvokePolicy: { FunctionName: !Ref PemsFetcher }
+      DefinitionSubstitutions:
+        FetchFn: !GetAtt PemsFetcher.Arn
+      Definition:
+        Comment: >
+          Download PeMS sensor data for a list of past district-days ({"todo": [{"district": 7,
+          "date": "2026-03-02"}, ...]}), one at a time, with the same function as the daily workflow.
+          The script starts a few of these side by side. A day that fails is recorded and the rest
+          carry on; rerunning the script retries whatever is still missing.
+        StartAt: FetchEach
+        States:
+          FetchEach:
+            Type: Map
+            ItemsPath: $.todo
+            MaxConcurrency: 1
+            ItemProcessor:
+              ProcessorConfig: { Mode: INLINE }
+              StartAt: Fetch
+              States:
+                Fetch:
+                  Type: Task
+                  Resource: arn:aws:states:::lambda:invoke
+                  Parameters: { FunctionName: "${FetchFn}", Payload.$: "$" }
+                  OutputPath: $.Payload
+                  Retry:
+                    - { ErrorEquals: [States.ALL], IntervalSeconds: 120, MaxAttempts: 2, BackoffRate: 2 }
+                  Catch:
+                    - { ErrorEquals: [States.ALL], ResultPath: $.error, Next: MarkFailed }
+                  End: true
+                MarkFailed:
+                  Type: Pass
+                  Parameters: { district.$: $.district, date.$: $.date, status: failed }
+                  End: true
+            ResultPath: null
+            End: true
+
   # ---------- scheduled processing: dbt rebuild daily, model report on Mondays ----------
   ProcessingJobLogs:
     Type: AWS::Logs::LogGroup
@@ -340,7 +425,7 @@ Resources:
     Type: AWS::CodeBuild::Project
     Properties:
       Name: !Sub ${AWS::StackName}-processing
-      Description: Rebuild the dbt tables daily; on Mondays retrain the models and email a report
+      Description: Rebuild the dbt tables daily (with weather, lane closures, road layout); on Mondays retrain the models and email a report
       ServiceRole: !GetAtt ProcessingJobRole.Arn
       Source:
         Type: S3
@@ -349,7 +434,7 @@ Resources:
       Artifacts: { Type: NO_ARTIFACTS }
       Environment:
         Type: LINUX_CONTAINER
-        ComputeType: BUILD_GENERAL1_SMALL
+        ComputeType: BUILD_GENERAL1_LARGE    # 8 vCPU / 15 GB: training on months of history
         Image: aws/codebuild/amazonlinux-x86_64-standard:5.0
         EnvironmentVariables:
           - { Name: LAKE_BUCKET, Value: !Ref Lake }
@@ -357,7 +442,7 @@ Resources:
           - { Name: AWS_DEFAULT_REGION, Value: !Ref AWS::Region }
       LogsConfig:
         CloudWatchLogs: { Status: ENABLED, GroupName: !Ref ProcessingJobLogs }
-      TimeoutInMinutes: 60
+      TimeoutInMinutes: 480            # the Monday report trains on months of history (daily runs take ~45 min)
 
   # ---------- alerts ----------
   AlertTopic:
@@ -416,6 +501,36 @@ Resources:
       TreatMissingData: notBreaching
       AlarmActions: [!Ref AlertTopic]
 
+  LaneClosuresFailingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Caltrans lane closure collector failing for an hour (feed down or code error)
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref CaltransLaneClosures }]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
+  SpeedLookupFailingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: TomTom speed lookups failing repeatedly (bad key, service down or code error)
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions: [{ Name: FunctionName, Value: !Ref SpeedLookup }]
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopic]
+
   WorkflowFailedAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -438,6 +553,9 @@ Outputs:
   WorkflowArn:
     Description: Daily PeMS workflow (Step Functions)
     Value: !Ref DailyTrafficWorkflow
+  BackfillWorkflowArn:
+    Description: One-off PeMS sensor backfill (Step Functions)
+    Value: !Ref PemsBackfillWorkflow
   ProcessingJobName:
     Description: Scheduled processing job (CodeBuild)
     Value: !Ref ProcessingJob

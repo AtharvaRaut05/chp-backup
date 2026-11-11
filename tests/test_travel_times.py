@@ -1,9 +1,11 @@
+"""Caltrans CWWP2 collectors: travel times and lane closures."""
+
 import json
 
 import pytest
 import requests
 
-from caltrans import travel_times
+from caltrans import cwwp, lane_closures, travel_times
 from common import lake
 
 
@@ -39,7 +41,7 @@ def test_saves_one_raw_file_per_district(s3, monkeypatch):
         urls.append(url)
         return Resp(json.dumps({"data": [{"tt": 1}]}).encode())
 
-    monkeypatch.setattr(travel_times.requests, "get", get)
+    monkeypatch.setattr(cwwp.requests, "get", get)
     out = travel_times.main({}, None)
     assert out == {"saved": 4, "failed": {}}
     assert "https://cwwp2.dot.ca.gov/data/d8/tt/ttStatusD08.json" in urls
@@ -56,7 +58,7 @@ def test_one_bad_district_does_not_stop_the_others(s3, monkeypatch):
             return Resp(b"", status=503)
         return Resp(b"{}")
 
-    monkeypatch.setattr(travel_times.requests, "get", get)
+    monkeypatch.setattr(cwwp.requests, "get", get)
     out = travel_times.main({}, None)
     assert out["saved"] == 2 and set(out["failed"]) == {11, 3}
 
@@ -65,6 +67,19 @@ def test_all_districts_failing_raises_for_the_alarm(s3, monkeypatch):
     def get(url, **kw):
         raise requests.ConnectionError("down")
 
-    monkeypatch.setattr(travel_times.requests, "get", get)
+    monkeypatch.setattr(cwwp.requests, "get", get)
     with pytest.raises(RuntimeError):
         travel_times.main({}, None)
+
+
+def test_lane_closures_saved_for_the_socal_districts(s3, monkeypatch):
+    urls = []
+
+    def get(url, **kw):
+        urls.append(url)
+        return Resp(b'{"data": []}')
+
+    monkeypatch.setattr(cwwp.requests, "get", get)
+    assert lane_closures.main({}, None) == {"saved": 4, "failed": {}}
+    assert "https://cwwp2.dot.ca.gov/data/d7/lcs/lcsStatusD07.json" in urls
+    assert all(p["Key"].startswith("raw/caltrans_lcs/dt=") for p in s3.puts)

@@ -1,6 +1,7 @@
--- Normal (recurring) congestion at each incident's site sensor, from OTHER days' history: how
+-- Normal (recurring) congestion at each incident's site sensor, from EARLIER days' history: how
 -- slow this spot usually is right now and over the next hour, and how long until it usually
--- flows freely again. All of it is known before the crash, so it's safe as a model input.
+-- flows freely again. Only days before the crash (within profile_window_days) count, so all of
+-- it is known in advance, as it would be for a model running live.
 --
 -- A crash at 5:15 PM where rush hour normally clears at 7 behaves differently from one at
 -- 6:50 PM; these columns tell the model which situation it's in.
@@ -11,8 +12,9 @@
 --                                    typical speed now, 30 and 60 min later, / free-flow speed
 --   typical_congestion_minutes_left  minutes until the typical speed reaches 90% of free flow
 --                                    (0 = normally free-flowing now; 180 = not within 3 hours)
--- Uses the same weekday/weekend history as the label's baseline, leaving out the incident's
--- own day, and only time slots with at least min_profile_days of history.
+-- Same weekday/weekend profiles as the label's baseline, but past days only (the label may use
+-- days on both sides; it's judged after the fact), and only time slots with at least
+-- min_profile_days of history. The first weeks of data have no history yet: nulls, not guesses.
 
 with incidents as (
     select
@@ -46,7 +48,8 @@ history as (
     join {{ ref('int_station_profile') }} p
         on p.station_id = k.site_station_id
        and p.day_type = k.day_type
-       and p.dt <> k.incident_dt
+       and p.dt < k.incident_dt                   -- only days before the crash: known in advance
+       and date_diff('day', cast(p.dt as date), cast(k.incident_dt as date)) <= {{ var('profile_window_days') }}
     group by k.log_id, k.log_slot, p.slot
     having count(*) >= {{ var('min_profile_days') }}
 ),

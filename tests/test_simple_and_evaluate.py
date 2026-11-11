@@ -139,3 +139,29 @@ def test_a_fold_without_enough_data_is_skipped_not_fatal(data):
     out = cross_validate(small, VARIANTS[1], log=logged.append)
     assert any("skipped" in m for m in logged)
     assert out["incident_day"].nunique() < len(days)
+
+
+def test_history_rows_train_but_are_never_scored(data):
+    from forward_test import retrain_points
+
+    days = sorted(data["incident_day"].unique())
+    hist = data["incident_day"].isin(days[:4])
+    mixed = data.assign(source=np.where(hist, "history", "live"))
+    small = mixed[mixed["incident_day"].isin(days[:7])]
+    out = cross_validate(small, VARIANTS[1], log=lambda *_: None)
+    assert set(out["incident_day"]) == set(days[4:7])
+    assert len(out) == int((small["source"] == "live").sum())
+    assert all(d >= days[4] for d in retrain_points(mixed, min_train_days=1))
+
+
+def test_history_filling_a_live_day_trains_but_is_not_scored(data):
+    from forward_test import chronological_split
+
+    days = sorted(data["incident_day"].unique())[:8]
+    small = data[data["incident_day"].isin(days)].copy()
+    first = small.groupby("incident_day")["log_id"].transform(lambda s: s.isin(s.unique()[:20]))
+    small["source"] = np.where(first, "history", "live")   # an outage hour on every day, filled from PeMS
+    out = cross_validate(small, VARIANTS[1], log=lambda *_: None)
+    assert len(out) == int((small["source"] == "live").sum())
+    train, test = chronological_split(small, 1)
+    assert (test["source"] == "live").all() and (train["source"] == "history").any()

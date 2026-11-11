@@ -4,8 +4,10 @@ Rain is one of the biggest drivers of crashes and backups, and it's known in rea
 a model input. Source: Open-Meteo (https://open-meteo.com), free for non-commercial use, no key.
 
 Places are 0.25-degree grid cells (about 25 km), roughly the resolution of the weather models.
-The job asks Athena which (cell, day) pairs have CHP incidents but no weather yet, so the first run
-backfills everything and later runs fetch only the new day. It runs before dbt in the daily job; if
+The job asks Athena which (cell, day) pairs have CHP incidents (live, or PeMS history in the
+districts the poller covers) but no weather yet, so the first run backfills everything and later
+runs fetch only the new day. Open-Meteo's free daily limit can cut a big backfill short; what's
+left is fetched on the following days. It runs before dbt in the daily job; if
 the weather service is down, it warns and the rest of the job carries on (rain features are then
 missing for those days, and the next run fills them in).
 
@@ -37,12 +39,14 @@ DATABASE = "traffic_bronze"
 TABLE = "weather_hourly"
 CELLS_PER_REQUEST = 50
 START = date(2026, 9, 28)            # first day of CHP collection
+HISTORY_DISTRICTS = "4, 7, 8, 11, 12"  # PeMS history (scripts/backfill_chp_history.py): districts the poller covers
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"          # recent days (up to ~3 months back)
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"    # older days (reanalysis, a few days' lag)
 ARCHIVE_AFTER_DAYS = 60
 # Open-Meteo counts each location in a request as a call and limits calls per minute (and per day).
 # 50 locations every 6 seconds stays under the per-minute limit; a 429 waits out the minute and retries.
 PAUSE_SECONDS = 6
+STOP_AFTER_FAILURES = 3  # in a row: stop for today instead of retrying hundreds of requests
 COLUMNS = {"grid_lat": "double", "grid_lon": "double", "ts": "timestamp", "precipitation_mm": "double",
            "fetched_at": "timestamp"}
 
@@ -118,6 +122,14 @@ def get(url: str, retries: int = 3) -> bytes:
 def needed_cells(session) -> pd.DataFrame:
     import awswrangler as wr
 
+    history = ""
+    if wr.catalog.does_table_exist(DATABASE, "hist_chp_incidents", boto3_session=session):
+        history = f"""
+        union
+        select distinct round(lat * 4) / 4, round(lon * 4) / 4,
+               cast(date(log_time at time zone 'America/Los_Angeles') as varchar)
+        from hist_chp_incidents
+        where lat is not null and lon is not null and district in ({HISTORY_DISTRICTS})"""
     return wr.athena.read_sql_query(f"""
         select distinct round(lat * 4) / 4 as grid_lat, round(lon * 4) / 4 as grid_lon,
                cast(date(log_time at time zone 'America/Los_Angeles') as varchar) as day
@@ -125,6 +137,7 @@ def needed_cells(session) -> pd.DataFrame:
         where lat is not null and lon is not null
           and dt >= '{START:%Y-%m-%d}'
           and date(log_time at time zone 'America/Los_Angeles') < date(current_timestamp at time zone 'America/Los_Angeles')
+        {history}
     """, database=DATABASE, workgroup="traffic", boto3_session=session, ctas_approach=False)
 
 
@@ -181,16 +194,22 @@ def main() -> None:
     ensure_table(session, bucket)
     batches = plan(needed_cells(session), stored_cells(session))
     today = date.today()
-    rows, failed = 0, 0
+    rows, failed, in_a_row = 0, 0, 0
     for i, (day, cells) in enumerate(batches):
+        if in_a_row >= STOP_AFTER_FAILURES:  # most likely the daily limit: the rest waits for tomorrow
+            print(f"WARNING stopping after {in_a_row} failed requests in a row; "
+                  f"{len(batches) - i} requests left for the next run")
+            break
         if i:
             time.sleep(PAUSE_SECONDS)
         try:
             df = parse(get(request_url(day, cells, today)), day, cells, pd.Timestamp.now(tz="UTC"))
         except (OSError, ValueError, KeyError) as e:
             failed += 1
+            in_a_row += 1
             print(f"WARNING weather for {day} ({len(cells)} cells) not fetched: {str(e)[:200]}")
             continue
+        in_a_row = 0
         write(df, session, bucket)
         rows += len(df)
     print(f"weather: {len(batches)} requests, {rows:,} hourly rows written, {failed} failed"

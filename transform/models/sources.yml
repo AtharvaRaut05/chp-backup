@@ -21,3 +21,13 @@ sources:
         description: Status log of whether each district-day has PeMS data.
       - name: weather_hourly
         description: Hourly rainfall per 0.25-degree grid cell (Open-Meteo), written by jobs/weather.py.
+      - name: caltrans_lane_closures
+        description: Caltrans lane closures, one row per closure per UTC day listed (jobs/lane_closures.py).
+      - name: tomtom_flow
+        description: Live speed at each new freeway incident when first reported (src/tomtom/speed_lookup.py).
+      - name: road_layout
+        description: OpenStreetMap road layout at each incident (jobs/road_layout.py).
+      - name: hist_chp_incidents
+        description: PeMS's historical record of CHP incidents, one partition per day (scripts/backfill_chp_history.py).
+      - name: hist_chp_details
+        description: Dispatcher notes and unit events for those incidents (same script).

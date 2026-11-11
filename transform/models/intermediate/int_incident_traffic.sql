@@ -8,8 +8,9 @@
 --   expected_speed = typical speed at that time of day x pre_ratio
 -- This starts from the day's real conditions and follows the sensor's normal daily pattern,
 -- so a rush-hour slowdown that would have happened anyway isn't blamed on the incident.
--- "Typical" is the median of the same sensor, slot and weekday/weekend on OTHER days (the
--- incident's own day is left out so its slowdown doesn't count as normal). With fewer than
+-- "Typical" is the median of the same sensor, slot and weekday/weekend on OTHER days within
+-- profile_window_days (the incident's own day is left out so its slowdown doesn't count as normal;
+-- the window keeps months of history from mixing seasons and school terms). With fewer than
 -- min_profile_days such days, expected_speed falls back to the plain pre-crash average.
 --
 -- Only sensors that were healthy (actually measuring) on that day are included; see
@@ -79,6 +80,7 @@ typical as (
        and p.day_type = k.day_type
        and p.slot = k.slot
        and p.dt <> k.dt
+       and abs(date_diff('day', cast(p.dt as date), cast(k.dt as date))) <= {{ var('profile_window_days') }}
     group by k.station_id, k.dt, k.slot
 ),
 

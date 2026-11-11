@@ -9,7 +9,8 @@ day it predicts. The checks here never let a model see the future:
                    how much worse a missed backup is than an unneeded alert.
   retraining       a model trained once and never updated ("frozen") against one retrained every
                    Monday on all data so far, scored on the same later days. Plus a learning curve:
-                   the same test week, predicted from the most recent 3, 5, 7... training days.
+                   the same test week, predicted from the most recent 7, 28, 112 days or all of them
+                   (both only for the feature sets that could run live, and the latest 4 retrains).
   failure cases    which incidents the deployable model misses or alerts on wrongly, and where it
                    ranks worst.
 
@@ -26,7 +27,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, roc_auc_score
 
-from backup_model import VARIANTS, BoostedModel, Rule, Variant, drop_duplicate_reports, more_backup, prepare
+from backup_model import (VARIANTS, BoostedModel, Rule, Variant, drop_duplicate_reports, is_live, live_days, more_backup,
+                          prepare)
 from evaluate import METHODS, scores
 from simple_models import SimpleModel
 
@@ -37,6 +39,8 @@ ALERT_CHECKPOINT = 5     # minutes after the CHP log: the first moment an alert 
 TARGET_RECALL = 0.8      # the second way to set a threshold: catch 80% of backups on validation days
 MIN_TRAIN_DAYS = 7       # forward test: at least a full week of every day of the week to train on
 MIN_RETRAIN_DAYS = 5     # retraining study: the first weekly model, so the study starts as early as possible
+RETRAIN_POINTS = 4       # ... and only the latest 4 weekly retrains: each one is a fit on months of history
+DEPLOYABLE = ("CHP + history only", "CHP + pre-crash only")  # the slow studies only run for these
 
 
 # ---------- fitting ----------
@@ -68,7 +72,8 @@ def chronological_split(df: pd.DataFrame, test_days: int) -> tuple[pd.DataFrame,
     if len(days) < test_days + MIN_TRAIN_DAYS:
         raise ValueError(f"need {test_days + MIN_TRAIN_DAYS} days for a forward test, have {len(days)}")
     cutoff = days[-test_days]
-    return df[df["incident_day"] < cutoff], df[df["incident_day"] >= cutoff]
+    test = df["incident_day"] >= cutoff
+    return df[~test], df[test & is_live(df)]  # history filling an outage hour trains, never scores
 
 
 # ---------- alert metrics ----------
@@ -98,7 +103,7 @@ def thresholds_from_validation(train: pd.DataFrame, variant: Variant, seed: int 
     the recall threshold comes from a model fit on earlier training days and scored on the latest ones."""
     out = {f"miss = {k}x false alarm": 1 / (1 + k) for k in COST_RATIOS}
     days = days_of(train)
-    n_valid = max(1, len(days) // 5)
+    n_valid = max(1, min(7, len(days) // 5))  # the latest week at most: closest to the test days
     fit_part = train[train["incident_day"] < days[-n_valid]]
     valid = train[train["incident_day"] >= days[-n_valid]]
     valid = valid[valid["landmark_min"] == ALERT_CHECKPOINT]
@@ -169,9 +174,11 @@ def precision_at_recall(pred: pd.DataFrame, method: str = "boosted", levels=(0.5
 # ---------- retraining ----------
 
 def retrain_points(df: pd.DataFrame, min_train_days: int = MIN_RETRAIN_DAYS) -> list:
-    """Mondays with at least `min_train_days` days of data before them: when the weekly job retrains."""
+    """Mondays (among the days our poller saw) with at least `min_train_days` days of data before them:
+    when the weekly job retrains."""
     days = days_of(df)
-    return [d for d in days if pd.Timestamp(d).dayofweek == 0 and sum(x < d for x in days) >= min_train_days]
+    points = [d for d in live_days(df) if d.weekday() == 0 and sum(x < d for x in days) >= min_train_days]
+    return points[-RETRAIN_POINTS:]
 
 
 def retraining_study(df: pd.DataFrame, variant: Variant, n_boot: int = 200, seed: int = 0, log=print):
@@ -186,7 +193,7 @@ def retraining_study(df: pd.DataFrame, variant: Variant, n_boot: int = 200, seed
     parts = []
     for i, pt in enumerate(points[1:], 1):
         end = points[i + 1] if i + 1 < len(points) else None
-        week = df[(df["incident_day"] >= pt) & ((df["incident_day"] < end) if end else True)]
+        week = df[(df["incident_day"] >= pt) & ((df["incident_day"] < end) if end else True) & is_live(df)]
         frozen, fresh = models[points[0]].predict(week), models[pt].predict(week)
         out = fresh[["log_id", "landmark_min", "incident_day", "remaining_minutes", "is_censored"]].copy()
         out["week_of"] = pt
@@ -226,7 +233,7 @@ def compare_frozen(pred: pd.DataFrame, n_boot: int = 200, seed: int = 0) -> pd.D
             .reindex(METHODS, level=0))
 
 
-def learning_curve(df: pd.DataFrame, variant: Variant, test_days: int, windows=(3, 5, 7, 10, 14, 21, 28),
+def learning_curve(df: pd.DataFrame, variant: Variant, test_days: int, windows=(7, 28, 112),
                    seed: int = 0, log=print) -> pd.DataFrame:
     """Same test days, predicted from the most recent N training days: does more history help?"""
     train, test = chronological_split(df, test_days)
@@ -318,10 +325,12 @@ def run(df: pd.DataFrame, test_days: int = 7, n_boot: int = 200, out=None, log=p
             "alert_tradeoff_rule": alert_table(pred, thresholds, "rule"),
         }
         r["failure_profile"], r["failure_subgroups"], r["failure_examples"] = failure_cases(test, pred, cost4)
-        log("  retraining study")
-        r["retraining"], retrain_pred = retraining_study(df, v, n_boot, log=log)
-        log("  learning curve")
-        r["learning_curve"] = learning_curve(df, v, test_days, log=log)
+        retrain_pred = None
+        if v.name in DEPLOYABLE:  # "with live traffic" is detection, not a model to deploy: skip its slow studies
+            log("  retraining study")
+            r["retraining"], retrain_pred = retraining_study(df, v, n_boot, log=log)
+            log("  learning curve")
+            r["learning_curve"] = learning_curve(df, v, test_days, log=log)
         r["forward_predictions"] = pred
         if isinstance(retrain_pred, pd.DataFrame):
             r["retraining_predictions"] = retrain_pred

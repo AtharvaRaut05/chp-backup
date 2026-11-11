@@ -97,12 +97,21 @@ VARIANTS = [
             ["landmark_min", "lanes_group", "type_code"]),
 ]
 # Newer columns in the training table. Older cached tables don't have them; prepare() fills them in
-# as missing. ZONE is in FEATURES (it helped on the development days); WEATHER is collected but not
-# used yet: with few rainy days it didn't help (see the README, "Improving the models").
+# as missing. ZONE is in FEATURES (it helped on the development days). The other groups are collected
+# but not used yet: each joins FEATURES only once ml/feature_check.py shows it helps (see the README,
+# "Improving the models"). All are known when the prediction is made, so none needs PeMS.
 ZONE = ["zone_typical_min_now", "zone_typical_min_in_30", "zone_typical_min_in_60", "zone_typical_mean_now",
         "zone_share_congested_now", "approach_typical_mean_now"]
 WEATHER = ["rain_last_hour_mm", "rain_last_3h_mm", "rain_last_24h_mm"]
-OPTIONAL = [*ZONE, *WEATHER]
+ROAD = ["osm_lanes", "lane_drop_ahead", "exits_ahead_1mi", "merges_behind_1mi", "dist_next_exit_mi",
+        "dist_prev_merge_mi", "curve_deg", "maxspeed_mph", "on_bridge"]                     # OpenStreetMap
+CALENDAR = ["is_holiday", "near_holiday", "long_weekend", "getaway_day", "winter_break", "dst_week", "special_day",
+            "sun_elevation_deg", "is_dark", "sun_glare"]
+CLOSURES = ["closure_nearby", "closure_lanes_closed", "closure_full", "planned_closure_nearby"]  # Caltrans
+REPORT_SPEED = ["live_speed_ratio", "live_speed_kmh", "live_road_closed", "live_speed_confidence"]  # TomTom
+CANDIDATES = {"weather": WEATHER, "road layout": ROAD, "calendar": CALENDAR, "lane closures": CLOSURES,
+              "speed at report": REPORT_SPEED}
+OPTIONAL = [*ZONE, *(c for group in CANDIDATES.values() for c in group)]
 MIN_POSITIVE = 10  # backed-up rows needed in each split to fit and score anything meaningful
 RAW_COLUMNS = [c for c in FEATURES if c not in ENGINEERED] + [
     "log_id", "log_time", "day_type", "remaining_minutes", "is_censored"]
@@ -118,16 +127,16 @@ def prepare(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["log_time"] = pd.to_datetime(df["log_time"], utc=True)
     df["incident_day"] = df["log_time"].dt.tz_convert("America/Los_Angeles").dt.date
-    keep_text = {*CATEGORICAL, "log_id", "log_time", "incident_day", "day_type",
+    # live = seen by our poller; history = PeMS's record of CHP incidents (training only, never scored)
+    df["source"] = df["source"].fillna("live") if "source" in df else "live"
+    keep_text = {*CATEGORICAL, "log_id", "log_time", "incident_day", "day_type", "source",
                  "dispatch_id", "district", "freeway", "direction"}
     for c in CATEGORICAL:
         df[c] = df[c].astype("string").astype("category")
     for c in df.columns.difference(list(keep_text)):
         df[c] = pd.to_numeric(df[c].astype("object"), errors="coerce").astype(float)  # bool/Int64 -> float, NA -> nan
-    for c in ["label_adjusted_share", *OPTIONAL]:
-        if c not in df:
-            df[c] = np.nan
-    return add_engineered(df)
+    df = df.assign(**{c: np.nan for c in ["label_adjusted_share", *OPTIONAL] if c not in df})
+    return add_engineered(df.copy())  # copy: one block instead of dozens of added columns
 
 
 def add_engineered(df: pd.DataFrame) -> pd.DataFrame:
@@ -205,6 +214,16 @@ def split_by_day(df: pd.DataFrame, test_share: float = 0.25) -> tuple[pd.DataFra
     n_test = min(max(1, int((share <= test_share + 1e-9).sum())), len(per_day) - 1)
     is_test = df["incident_day"].isin(per_day.index[:n_test])
     return df[~is_test], df[is_test]
+
+
+def is_live(df: pd.DataFrame) -> pd.Series:
+    """Rows our poller saw. Only these are ever scored: PeMS history (before the poller started and in
+    the hours it was down) is a different source, notes timed after the fact, so it only trains."""
+    return df["source"] == "live" if "source" in df else pd.Series(True, index=df.index)
+
+
+def live_days(df: pd.DataFrame) -> list:
+    return sorted(df.loc[is_live(df), "incident_day"].unique())
 
 
 def more_backup(df: pd.DataFrame) -> pd.Series:

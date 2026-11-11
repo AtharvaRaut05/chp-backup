@@ -29,7 +29,7 @@ import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import roc_auc_score
 
-from backup_model import VARIANTS, BoostedModel, drop_duplicate_reports, more_backup, prepare
+from backup_model import VARIANTS, BoostedModel, drop_duplicate_reports, is_live, more_backup, prepare
 
 HERE = Path(__file__).resolve().parent
 MODELS = HERE / "models" / "current"
@@ -102,7 +102,7 @@ def decide(df: pd.DataFrame, name: str, folder: Path, seed: int = 0) -> dict:
     elif len(unseen) < MIN_WINDOW_DAYS:
         return {**row, "decision": "keep", "reason": f"only {len(unseen)} new days since the current model"}
     else:
-        window = df[df["incident_day"].isin(unseen)]
+        window = df[df["incident_day"].isin(unseen) & is_live(df)]  # history rows train, never score
         before = df[df["incident_day"] < unseen[0]]
         champion, meta = current
         missing = set(meta["features"]) - set(df.columns)

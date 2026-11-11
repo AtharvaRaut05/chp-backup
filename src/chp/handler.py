@@ -1,13 +1,17 @@
 """Lambda entry point: poll the CHP feed and write only new or changed incidents.
 
 Steps: fetch -> parse -> compare with saved state -> (if changed) save raw, write Parquet
-for changed incidents and detected closures -> save state. State is saved last, so a
+for changed incidents and detected closures -> save state -> ask for a live speed lookup at each
+new freeway incident (tomtom/speed_lookup.py, run asynchronously). State is saved after the data, so a
 failure part-way is retried on the next run (writes are at-least-once; dbt dedupes).
 """
 
 import json
+import os
+import re
 from datetime import datetime, timezone
 
+import boto3
 from botocore.exceptions import ClientError
 
 from chp.fetch import get_feed
@@ -21,7 +25,7 @@ from chp.state import (
     save_state,
     snapshot_hash,
 )
-from common.config import load
+from common.config import TRAFFIC_TYPE_CODES, load
 from common.lake import put_raw, write_bronze
 
 
@@ -58,8 +62,35 @@ def main(event, context):
             raise
         # An overlapping run saved first. Its state wins; ours is dropped (dbt reads the latest version).
         return _log({"status": "superseded", "changed": len(changed)})
+    looked_up = request_speed_lookups(new_freeway_incidents(snap, set(hashes) - set(state.incidents)))
     return _log({"status": "changed", "key": key, "open": len(incidents), "changed": len(changed),
-                 "closed": len(closures), **{t: len(df) for t, df in tables.items()}})
+                 "closed": len(closures), **{t: len(df) for t, df in tables.items()}, "speed_lookups": looked_up})
+
+
+_FREEWAY = re.compile(r"\b(?:I|SR|US)-?\d{1,3}\b|\b[NSEW]B \d{1,3}\b")
+
+
+def new_freeway_incidents(snap, new_ids: set[str]) -> list[dict]:
+    """New traffic incidents (collisions, hazards, SigAlerts) on a freeway, with a location."""
+    inc = snap.incidents[snap.incidents["log_id"].isin(new_ids)]
+    text = (inc["location"].fillna("") + " " + inc["location_desc"].fillna("")).str.upper()
+    keep = ((inc["log_type_code"].isin(TRAFFIC_TYPE_CODES) | (inc["log_type"] == "SIG Alert"))
+            & text.str.contains(_FREEWAY) & inc["lat"].notna() & inc["lon"].notna())
+    return [{"log_id": r.log_id, "lat": float(r.lat), "lon": float(r.lon)} for r in inc[keep].itertuples()]
+
+
+def request_speed_lookups(incidents: list[dict]) -> int:
+    """Hand new incidents to the speed lookup function without waiting for it. Never fails the poll."""
+    function = os.environ.get("SPEED_LOOKUP_FUNCTION")
+    if not function or not incidents:
+        return 0
+    try:
+        boto3.client("lambda").invoke(FunctionName=function, InvocationType="Event",
+                                      Payload=json.dumps({"incidents": incidents}).encode())
+    except Exception as e:  # a lookup is nice to have; the poll's own data is already saved
+        print(f"WARNING speed lookup not requested: {str(e)[:200]}")
+        return 0
+    return len(incidents)
 
 
 def _log(summary: dict) -> dict:

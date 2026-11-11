@@ -1,4 +1,4 @@
--- Normal (recurring) congestion along the whole backup zone, from OTHER days' history.
+-- Normal (recurring) congestion along the whole backup zone, from EARLIER days' history.
 -- int_incident_recurring describes the one sensor at the crash; a stretch a mile back that is
 -- normally jammed at this hour matters too, because that's where the queue has to grow.
 --
@@ -8,7 +8,7 @@
 --   zone_share_congested_now                share of queue-zone sensors normally below 70% of free flow now
 --   approach_typical_mean_now               average over approach-zone sensors (5-10 mi upstream)
 --
--- Typical speed per slot leaves out the incident's own day, as everywhere else. Free-flow speed
+-- Typical speed per slot uses only days before the crash (within profile_window_days). Free-flow speed
 -- (90th percentile of a sensor's typical speeds across the day) is computed once per sensor over all
 -- days: one day barely moves a 90th percentile, and recomputing it per incident would multiply the cost.
 -- All of it is known before the crash, so it's safe as a model input.
@@ -48,21 +48,26 @@ free_flow as (
 ),
 
 typical as (
+    -- the three time slots (now, +30, +60 min) as rows, so the profile join is an exact match on
+    -- sensor, day type and slot: Athena can then hash-join instead of comparing every slot of every
+    -- day (with months of history that comparison never finished)
     select
         s.log_id,
         s.station_id,
         s.role,
         k.day_type,
-        (p.slot - k.log_slot) * 5       as minutes_ahead,
+        o.slots_ahead * 5               as minutes_ahead,
         approx_percentile(p.speed, 0.5) as typical_speed
     from sensors s
     join incidents k on k.log_id = s.log_id
+    cross join unnest(array[0, 6, 12]) as o (slots_ahead)
     join {{ ref('int_station_profile') }} p
         on p.station_id = s.station_id
        and p.day_type = k.day_type
-       and p.dt <> k.incident_dt
-       and p.slot in (k.log_slot, k.log_slot + 6, k.log_slot + 12)
-    group by s.log_id, s.station_id, s.role, k.day_type, p.slot - k.log_slot
+       and p.slot = k.log_slot + o.slots_ahead
+    where p.dt < k.incident_dt                   -- only days before the crash: known in advance
+      and date_diff('day', cast(p.dt as date), cast(k.incident_dt as date)) <= {{ var('profile_window_days') }}
+    group by s.log_id, s.station_id, s.role, k.day_type, o.slots_ahead
     having count(*) >= {{ min_days }}
 ),
 

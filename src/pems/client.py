@@ -43,7 +43,8 @@ class PemsClient:
             "yy": year, "type": file_type, "returnformat": "text",
         })
         resp.raise_for_status()
-        data = resp.json().get("data") or {}  # PeMS returns [] when nothing exists
+        body = resp.json()  # PeMS returns [] (or {"data": []}) when nothing exists
+        data = (body.get("data") if isinstance(body, dict) else None) or {}
         months = data.values() if isinstance(data, dict) else []
         return {f["file_name"]: urljoin(BASE, f["url"]) for files in months for f in files}
 

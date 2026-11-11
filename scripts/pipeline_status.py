@@ -4,13 +4,16 @@
     python scripts/pipeline_status.py --days 21
 
   1. alarms              any CloudWatch alarm currently firing, and whether the alert email is confirmed
-     collectors          runs and errors per hour for the CHP poller and the travel-time collector
+     collectors          runs and errors per hour for the CHP poller, the Caltrans collectors and the speed lookup
                          over the last 6 hours, with their latest error messages
   2. daily workflow      recent Step Functions runs and the error of any failed one
   3. processing job      recent CodeBuild runs (the dbt rebuild / weekly report)
   4. rows per day        CHP incidents (bronze), PeMS readings (bronze), pairing status,
                          labeled incidents and training rows (silver), side by side
-  5. funnel              per dispatch center, how many incidents survive each step from the feed
+  5. new data sources    per day: lane closures parsed, speed lookups made (and how many landed on the
+                         right carriageway), incidents placed on the OSM road, and the
+                         share of training rows that have each kind of data
+  6. funnel              per dispatch center, how many incidents survive each step from the feed
                          to a label, and how many sensors each district has, to find where a
                          region drops out
 """
@@ -50,7 +53,7 @@ def collectors(session, hours: int = 6) -> None:
     cfn, cw, logs = session.client("cloudformation"), session.client("cloudwatch"), session.client("logs")
     end = datetime.now(timezone.utc)
     start = end - timedelta(hours=hours)
-    for logical in ("ChpPoller", "CaltransTravelTimes"):
+    for logical in ("ChpPoller", "CaltransTravelTimes", "CaltransLaneClosures", "SpeedLookup"):
         try:
             name = cfn.describe_stack_resource(StackName=STACK, LogicalResourceId=logical)[
                 "StackResourceDetail"]["PhysicalResourceId"]
@@ -67,9 +70,18 @@ def collectors(session, hours: int = 6) -> None:
         for ts in sorted(set(counts["Invocations"]) | set(counts["Errors"])):
             print(f"  {ts:%m-%d %H:00}  runs {counts['Invocations'].get(ts, 0):>3}  errors {counts['Errors'].get(ts, 0):>3}")
         try:
-            events = logs.filter_log_events(logGroupName=f"/aws/lambda/{name}", startTime=int(start.timestamp() * 1000),
-                                            filterPattern='?ERROR ?"Task timed out" ?Traceback ?FeedError',
-                                            limit=200)["events"]
+            # CloudWatch can return empty pages with a token to continue while it scans, so follow them
+            events, token = [], None
+            for _ in range(50):
+                page = logs.filter_log_events(logGroupName=f"/aws/lambda/{name}",
+                                              startTime=int(start.timestamp() * 1000),
+                                              filterPattern='?ERROR ?"Task timed out" ?Traceback ?FeedError '
+                                                            '?"Runtime exited"',
+                                              **({"nextToken": token} if token else {}))
+                events += page["events"]
+                token = page.get("nextToken")
+                if not token:
+                    break
         except Exception as e:  # noqa: BLE001
             print(f"  (logs not readable: {str(e)[:120]})")
             continue
@@ -149,6 +161,44 @@ def per_day(session, days: int) -> None:
         print(table.sort_values("day", ascending=False).to_string(index=False))
 
 
+def new_sources(session, days: int) -> None:
+    since = f"date_add('day', -{days}, current_date)"
+    table = wr.athena.read_sql_query(f"""
+        with incidents as (
+            select i.incident_day as day,
+                   count(*)                     as freeway_incidents,
+                   count(r.log_id)              as on_osm_road,
+                   count(f.log_id)              as speed_lookups,
+                   count(s.live_speed_ratio)    as speed_usable
+            from stg_chp_incidents i
+            left join stg_road_layout r on r.log_id = i.log_id and r.match_m is not null
+            left join stg_tomtom_flow f on f.log_id = i.log_id
+            left join int_incident_live_speed s on s.log_id = i.log_id
+            where i.is_traffic and i.freeway is not null and i.incident_day >= {since}
+            group by 1
+        ),
+        closures as (
+            select date(first_seen at time zone 'America/Los_Angeles') as day, count(*) as new_closures
+            from stg_lane_closures group by 1
+        ),
+        training as (
+            select date(log_time at time zone 'America/Los_Angeles') as day,
+                   round(avg(if(osm_lanes is not null or lane_drop_ahead is not null, 1.0, 0.0)), 2) as rows_road,
+                   round(avg(if(closure_nearby is not null, 1.0, 0.0)), 2)                           as rows_closures,
+                   round(avg(if(live_speed_ratio is not null, 1.0, 0.0)), 2)                         as rows_speed
+            from fct_training_landmarks where log_time >= {since} group by 1
+        )
+        select i.*, c.new_closures, t.rows_road, t.rows_closures, t.rows_speed
+        from incidents i
+        left join closures c on c.day = i.day
+        left join training t on t.day = i.day
+        order by i.day desc""",
+        database="traffic_silver", workgroup="traffic", boto3_session=session, ctas_approach=False)
+    print("\nNEW DATA SOURCES PER DAY (rows_* = share of training rows that have that data; 0 before collection started)")
+    with pd.option_context("display.width", 200, "display.max_rows", 100):
+        print(table.to_string(index=False))
+
+
 def funnel(session, days: int) -> None:
     def q(sql):
         return wr.athena.read_sql_query(sql, database="traffic_silver", workgroup="traffic",
@@ -208,7 +258,7 @@ def main() -> None:
         for step in (lambda: alarms(session), lambda: collectors(session),
                      lambda: workflow(session, outputs["WorkflowArn"]),
                      lambda: job(session, outputs["ProcessingJobName"]), lambda: per_day(session, args.days),
-                     lambda: funnel(session, args.days)):
+                     lambda: new_sources(session, args.days), lambda: funnel(session, args.days)):
             try:
                 step()
             except Exception as e:  # noqa: BLE001

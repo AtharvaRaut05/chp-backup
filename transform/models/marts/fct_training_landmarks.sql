@@ -40,6 +40,7 @@ incidents as (
         i.initial_type_code,
         i.closed_detected_at,
         i.first_polled_at,
+        i.source,
         i.log_time at time zone 'America/Los_Angeles' as log_local
     from {{ ref('stg_chp_incidents') }} i
     join labels l on l.log_id = i.log_id
@@ -117,6 +118,7 @@ select
     lm.log_id,
     lm.landmark_min,
     i.log_time,
+    i.source,                                   -- live (our poller) or history (PeMS's record); not a model input
 
     -- when and where
     i.dispatch_id,
@@ -190,6 +192,41 @@ select
     w.rain_last_3h_mm,
     w.rain_last_24h_mm,
 
+    -- the road layout around the crash (OpenStreetMap)
+    rl.road_lanes                                                                as osm_lanes,
+    rl.lane_drop_ahead,
+    rl.exits_ahead_1mi,
+    rl.merges_behind_1mi,
+    rl.dist_next_exit_mi,
+    rl.dist_prev_merge_mi,
+    rl.curve_deg,
+    rl.maxspeed_mph,
+    rl.on_bridge,
+
+    -- calendar and daylight
+    cal.is_holiday,
+    cal.near_holiday,
+    cal.long_weekend,
+    cal.getaway_day,
+    cal.winter_break,
+    cal.dst_week,
+    cal.special_day,
+    cal.sun_elevation_deg,
+    cal.is_dark,
+    cal.sun_glare,
+
+    -- lane closures in place at the crash (Caltrans; null before collection started)
+    lc.closure_nearby,
+    lc.closure_lanes_closed,
+    lc.closure_full,
+    lc.planned_closure_nearby,
+
+    -- speed at the crash when it was reported (TomTom; only once the lookup had been made)
+    if(ls.speed_requested_at <= i.log_time + lm.landmark_min * interval '1' minute, ls.live_speed_ratio)      as live_speed_ratio,
+    if(ls.speed_requested_at <= i.log_time + lm.landmark_min * interval '1' minute, ls.live_speed_kmh)        as live_speed_kmh,
+    if(ls.speed_requested_at <= i.log_time + lm.landmark_min * interval '1' minute, ls.live_road_closed)      as live_road_closed,
+    if(ls.speed_requested_at <= i.log_time + lm.landmark_min * interval '1' minute, ls.live_speed_confidence) as live_speed_confidence,
+
     -- traffic since the crash, up to the landmark
     t.queue_ratio_now,
     coalesce(t.backed_up_now, false)                                             as backed_up_now,
@@ -216,6 +253,10 @@ join {{ ref('int_incident_precrash') }} p on p.log_id = lm.log_id
 left join {{ ref('int_incident_recurring') }} r on r.log_id = lm.log_id
 left join {{ ref('int_incident_zone_recurring') }} z on z.log_id = lm.log_id
 left join {{ ref('int_incident_weather') }} w on w.log_id = lm.log_id
+left join {{ ref('stg_road_layout') }} rl on rl.log_id = lm.log_id
+left join {{ ref('int_incident_calendar') }} cal on cal.log_id = lm.log_id
+left join {{ ref('int_incident_lane_closures') }} lc on lc.log_id = lm.log_id
+left join {{ ref('int_incident_live_speed') }} ls on ls.log_id = lm.log_id
 left join notes n on n.log_id = lm.log_id and n.landmark_min = lm.landmark_min
 left join units u on u.log_id = lm.log_id and u.landmark_min = lm.landmark_min
 left join live t on t.log_id = lm.log_id and t.landmark_min = lm.landmark_min

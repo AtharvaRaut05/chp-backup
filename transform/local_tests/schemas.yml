@@ -1,0 +1,64 @@
+# Column types of every table the dbt unit tests mock, for run.py (DuckDB).
+# A column missing here is typed from the test's own values; add it here if that guess is wrong.
+calendar_days: {day: DATE, name: VARCHAR, kind: VARCHAR}
+caltrans_lane_closures: {closure_key: VARCHAR, district: INTEGER, closure_id: VARCHAR, route: VARCHAR, direction: VARCHAR, begin_lat: DOUBLE, begin_lon: DOUBLE,
+  end_lat: DOUBLE, end_lon: DOUBLE, begin_abs_pm: DOUBLE, end_abs_pm: DOUBLE, facility: VARCHAR, closure_type: VARCHAR, work_type: VARCHAR, lanes_closed: VARCHAR,
+  total_lanes: VARCHAR, planned_start: TIMESTAMP, planned_end: TIMESTAMP, started_at: TIMESTAMP, ended_at: TIMESTAMP, cancelled_at: TIMESTAMP, first_seen: TIMESTAMP,
+  last_seen: TIMESTAMP, n_polls: INTEGER, dt: VARCHAR}
+chp_closures: {log_id: VARCHAR, first_seen: TIMESTAMP, last_seen: TIMESTAMP, closed_detected_at: TIMESTAMP, dt: VARCHAR}
+chp_details: {log_id: VARCHAR, detail_seq: INTEGER, detail_time: TIMESTAMP, detail_text: VARCHAR, detail_raw: VARCHAR, polled_at: TIMESTAMP, dt: VARCHAR}
+chp_incidents: {log_id: VARCHAR, center_id: VARCHAR, dispatch_id: VARCHAR, log_time: TIMESTAMP, log_type: VARCHAR, log_type_code: VARCHAR, log_type_desc: VARCHAR,
+  location: VARCHAR, location_desc: VARCHAR, area: VARCHAR, lat: DOUBLE, lon: DOUBLE, polled_at: TIMESTAMP, dt: VARCHAR}
+dispatch_districts: {dispatch_id: VARCHAR, district: VARCHAR}
+fct_incident_backup: {log_id: VARCHAR, has_backup: BOOLEAN, backup_start_min: INTEGER, backup_end_min: INTEGER, backup_minutes: INTEGER, is_censored: BOOLEAN,
+  label_adjusted_share: DOUBLE}
+hist_chp_details: {incident_id: VARCHAR, detail_seq: INTEGER, detail_time: TIMESTAMP, seen_at: TIMESTAMP, detail_text: VARCHAR, dt: VARCHAR}
+hist_chp_incidents: {incident_id: VARCHAR, cc_code: VARCHAR, log_time: TIMESTAMP, log_type_code: VARCHAR, description: VARCHAR, location: VARCHAR, area: VARCHAR,
+  lat: DOUBLE, lon: DOUBLE, district: INTEGER, freeway: INTEGER, direction: VARCHAR, abs_pm: DOUBLE, duration_min: DOUBLE, dt: VARCHAR}
+int_backup_slots: {log_id: VARCHAR, t: INTEGER, is_slowed: BOOLEAN, is_clear: BOOLEAN, queue_extent_miles: DOUBLE, min_ratio: DOUBLE}
+int_incident_calendar: {log_id: VARCHAR, is_holiday: BOOLEAN, near_holiday: BOOLEAN, long_weekend: BOOLEAN, getaway_day: BOOLEAN, winter_break: BOOLEAN,
+  dst_week: BOOLEAN, special_day: BOOLEAN, sun_elevation_deg: DOUBLE, is_dark: BOOLEAN, sun_glare: BOOLEAN}
+int_incident_lane_closures: {log_id: VARCHAR, closure_nearby: BOOLEAN, closure_lanes_closed: INTEGER, closure_full: BOOLEAN, planned_closure_nearby: BOOLEAN}
+int_incident_live_speed: {log_id: VARCHAR, speed_requested_at: TIMESTAMP, live_speed_ratio: DOUBLE, live_speed_kmh: DOUBLE, live_road_closed: BOOLEAN, live_speed_confidence: DOUBLE}
+int_incident_precrash: {log_id: VARCHAR, site_speed: DOUBLE, site_occupancy: DOUBLE, site_flow: DOUBLE, site_ratio_to_typical: DOUBLE, site_lanes: DOUBLE,
+  site_speed_trend: DOUBLE, queue_speed: DOUBLE, queue_min_speed: DOUBLE, queue_occupancy: DOUBLE, queue_speed_trend: DOUBLE, queue_sensors: DOUBLE, approach_speed: DOUBLE,
+  approach_flow_per_sensor: DOUBLE, approach_lanes: DOUBLE, approach_flow_trend: DOUBLE, merge_flow: DOUBLE, connector_merge_flow: DOUBLE, exit_flow: DOUBLE,
+  merge_points: DOUBLE}
+int_incident_recurring: {log_id: VARCHAR, typical_ratio_now: DOUBLE, typical_ratio_in_30: DOUBLE, typical_ratio_in_60: DOUBLE, typical_congestion_minutes_left: DOUBLE}
+int_incident_stations: {log_id: VARCHAR, freeway: INTEGER, direction: VARCHAR, incident_pm: DOUBLE, nearest_km: DOUBLE, station_id: BIGINT, station_type: VARCHAR,
+  station_name: VARCHAR, abs_pm: DOUBLE, lanes: INTEGER, miles_upstream: DOUBLE, role: VARCHAR, role_rank: BIGINT}
+int_incident_traffic: {log_id: VARCHAR, station_id: BIGINT, station_type: VARCHAR, role: VARCHAR, role_rank: BIGINT, miles_upstream: DOUBLE, dt: VARCHAR,
+  ts: TIMESTAMP, minutes_from_log: BIGINT, avg_speed: DOUBLE, total_flow: DOUBLE, avg_occupancy: DOUBLE, is_observed: BOOLEAN, typical_speed: DOUBLE, typical_flow: DOUBLE,
+  profile_days: BIGINT, pre_speed: DOUBLE, pre_ratio: DOUBLE, expected_speed: DOUBLE, baseline_method: VARCHAR}
+int_incident_weather: {log_id: VARCHAR, rain_last_hour_mm: DOUBLE, rain_last_3h_mm: DOUBLE, rain_last_24h_mm: DOUBLE}
+int_incident_zone_recurring: {log_id: VARCHAR, zone_typical_min_now: DOUBLE, zone_typical_min_in_30: DOUBLE, zone_typical_min_in_60: DOUBLE, zone_typical_mean_now: DOUBLE,
+  zone_share_congested_now: DOUBLE, approach_typical_mean_now: DOUBLE}
+int_note_features: {log_id: VARCHAR, first_seen_at: TIMESTAMP, detail_seq: INTEGER, is_blocking: BOOLEAN, lanes_open: BOOLEAN, lanes_blocked: INTEGER, all_lanes: BOOLEAN,
+  vehicles: INTEGER, ambulance: BOOLEAN, tow: BOOLEAN, fsp: BOOLEAN, fire: BOOLEAN, sigalert: BOOLEAN, overturned: BOOLEAN, hazmat: BOOLEAN, fatality: BOOLEAN,
+  type_changed_to: VARCHAR}
+int_station_day_health: {station_id: BIGINT, dt: VARCHAR, lane_type: VARCHAR, share_measured: DOUBLE, is_healthy: BOOLEAN}
+int_station_profile: {station_id: BIGINT, dt: VARCHAR, day_type: VARCHAR, slot: INTEGER, speed: DOUBLE, flow: DOUBLE}
+road_layout: {log_id: VARCHAR, match_m: DOUBLE, road_heading_deg: DOUBLE, road_lanes: DOUBLE, lane_drop_ahead: DOUBLE, exits_ahead_1mi: DOUBLE, merges_behind_1mi: DOUBLE,
+  dist_next_exit_mi: DOUBLE, dist_prev_merge_mi: DOUBLE, curve_deg: DOUBLE, maxspeed_mph: DOUBLE, on_bridge: BOOLEAN, osm_downloaded: VARCHAR, dt: VARCHAR}
+stg_chp_incidents: {log_id: VARCHAR, dispatch_id: VARCHAR, district: VARCHAR, log_time: TIMESTAMP, incident_day: DATE, initial_type_code: VARCHAR, log_type_code: VARCHAR,
+  log_type: VARCHAR, is_traffic: BOOLEAN, location: VARCHAR, location_desc: VARCHAR, area: VARCHAR, lat: DOUBLE, lon: DOUBLE, freeway: INTEGER, direction: VARCHAR,
+  first_polled_at: TIMESTAMP, last_changed_at: TIMESTAMP, n_versions: BIGINT, last_seen_open: TIMESTAMP, closed_detected_at: TIMESTAMP, is_closed: BOOLEAN,
+  minutes_open: BIGINT, pairing_status: VARCHAR, source: VARCHAR}
+stg_chp_notes: {log_id: VARCHAR, detail_seq: BIGINT, detail_time: TIMESTAMP, first_seen_at: TIMESTAMP, detail_text: VARCHAR}
+stg_chp_units: {log_id: VARCHAR, unit_time: TIMESTAMP, unit_text: VARCHAR}
+stg_lane_closures: {closure_key: VARCHAR, route_number: INTEGER, direction_letter: VARCHAR, begin_lat: DOUBLE, begin_lon: DOUBLE, end_lat: DOUBLE, end_lon: DOUBLE,
+  lanes_closed: INTEGER, closure_type: VARCHAR, started_at: TIMESTAMP, active_to: TIMESTAMP, cancelled_at: TIMESTAMP, planned_start: TIMESTAMP, planned_end: TIMESTAMP,
+  first_seen: TIMESTAMP, last_seen: TIMESTAMP}
+stg_pems_5min: {station_id: BIGINT, lane_type: VARCHAR, district: INTEGER, dt: VARCHAR, ts: TIMESTAMP, total_flow: DOUBLE, avg_occupancy: DOUBLE, avg_speed: DOUBLE,
+  pct_observed: DOUBLE, is_observed: BOOLEAN}
+stg_pems_pairing: {district: VARCHAR, day: DATE, status: VARCHAR, updated_at: TIMESTAMP}
+stg_pems_stations: {station_id: BIGINT, type: VARCHAR, district: VARCHAR, freeway: INTEGER, direction: VARCHAR, abs_pm: DOUBLE, lat: DOUBLE, lon: DOUBLE,
+  lanes: INTEGER, name: VARCHAR}
+stg_road_layout: {log_id: VARCHAR, match_m: DOUBLE, road_heading_deg: DOUBLE, road_lanes: DOUBLE, lane_drop_ahead: DOUBLE, exits_ahead_1mi: DOUBLE, merges_behind_1mi: DOUBLE,
+  dist_next_exit_mi: DOUBLE, dist_prev_merge_mi: DOUBLE, curve_deg: DOUBLE, maxspeed_mph: DOUBLE, on_bridge: BOOLEAN}
+stg_tomtom_flow: {log_id: VARCHAR, requested_at: TIMESTAMP, frc: VARCHAR, current_speed_kmh: DOUBLE, free_flow_speed_kmh: DOUBLE, confidence: DOUBLE, road_closure: BOOLEAN,
+  segment_bearing_deg: DOUBLE}
+stg_weather_hourly: {grid_lat: DOUBLE, grid_lon: DOUBLE, ts: TIMESTAMP, precipitation_mm: DOUBLE}
+tomtom_flow: {log_id: VARCHAR, requested_at: TIMESTAMP, lat: DOUBLE, lon: DOUBLE, frc: VARCHAR, current_speed_kmh: DOUBLE, free_flow_speed_kmh: DOUBLE,
+  current_travel_time_s: DOUBLE, free_flow_travel_time_s: DOUBLE, confidence: DOUBLE, road_closure: BOOLEAN, segment_bearing_deg: DOUBLE, segment_km: DOUBLE,
+  dt: VARCHAR}

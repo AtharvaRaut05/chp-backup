@@ -21,19 +21,31 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
-from backup_model import BoostedModel, Rule, Variant, more_backup
+from backup_model import BoostedModel, Rule, Variant, is_live, live_days, more_backup
 from simple_models import SimpleModel
 
 METHODS = ["rule", "boosted", "simple"]
 GOOD_LABEL = 0.8  # label_adjusted_share at or above this counts as a full-baseline label
+MIN_WEEKS = 4     # hold out whole weeks once there are this many weeks of live days
 
 
 def cross_validate(df: pd.DataFrame, variant: Variant, seed: int = 0, log=print) -> pd.DataFrame:
-    """Out-of-sample predictions for every row, one held-out day at a time."""
+    """Out-of-sample predictions for every live row, one held-out week (Monday-Sunday) at a time,
+    or one day at a time while there are fewer than MIN_WEEKS weeks.
+
+    Training uses every other row, PeMS history included; history rows are never scored. Weeks rather
+    than single days once there are enough: with months of history each fit is large, and a week
+    still keeps all of a day's incidents (which share weather and traffic) on the same side."""
     parts = []
-    days = sorted(df["incident_day"].unique())
-    for i, day in enumerate(days, 1):
-        train, test = df[df["incident_day"] != day], df[df["incident_day"] == day]
+    days = live_days(df)
+    week_of = [d - pd.Timedelta(days=d.weekday()) for d in days]
+    groups = [[d for d, w in zip(days, week_of) if w == wk] for wk in sorted(set(week_of))]
+    if len(groups) < MIN_WEEKS:
+        groups = [[d] for d in days]
+    for i, held in enumerate(groups, 1):
+        out_days = df["incident_day"].isin(held)
+        train, test = df[~out_days], df[out_days & is_live(df)]
+        day = f"{held[0]} to {held[-1]}"
         try:
             preds = {
                 "rule": Rule(variant.rule_keys).fit(train).predict(test),
@@ -48,7 +60,7 @@ def cross_validate(df: pd.DataFrame, variant: Variant, seed: int = 0, log=print)
         for m, p in preds.items():
             out[f"{m}_p"], out[f"{m}_min"] = p["p_more_backup"], p["minutes_if_more"]
         parts.append(out)
-        log(f"  held out {day} ({i}/{len(days)}): {test['log_id'].nunique()} incidents")
+        log(f"  held out {day} ({i}/{len(groups)}): {test['log_id'].nunique()} incidents")
     return pd.concat(parts)
 
 

@@ -11,6 +11,10 @@ Reads the bronze tables written by the Lambdas (`traffic_bronze`) and builds cle
 | `stg_pems_stations` | Latest location, postmile and type of each sensor (mainline, ramps, connectors) |
 | `stg_pems_5min` | 5-minute readings with an `is_observed` quality flag (view) |
 | `stg_pems_pairing` | Current pairing status per district-day |
+| `stg_weather_hourly` | Hourly rainfall per 0.25° grid cell (newest download of each hour) |
+| `stg_lane_closures` | One row per Caltrans lane closure across the days it was listed, with when it was really in place |
+| `stg_tomtom_flow` | The live speed lookup made when each new freeway incident first appeared |
+| `stg_road_layout` | OpenStreetMap road layout at each incident (lanes, lane drop ahead, ramps, curve) |
 | `int_note_features` | Lanes blocked, vehicles, ambulance, tow, SigAlert, etc. parsed from each note |
 | `int_incident_stations` | Sensors around each incident by role: `queue` (0-5 mi upstream), `approach` (5-10 mi), `merge` (on-ramps and freeway connectors feeding the queue zone), `exit` (off-ramps) |
 | `int_station_profile` | Measured speed/flow per mainline sensor, per day and 5-minute slot: the history "typical traffic" is built from |
@@ -18,6 +22,10 @@ Reads the bronze tables written by the Lambdas (`traffic_bronze`) and builds cle
 | `int_station_day_health` | Whether each sensor was actually measuring (not imputed) on each day |
 | `int_incident_precrash` | One row per incident: conditions before the crash (site speed and trend, queue zone, approaching volume, merging volume, lane counts) |
 | `int_backup_slots` | Backup state of each incident per 5-minute slot (shared by the label and the live-traffic features) |
+| `int_incident_weather`, `int_incident_zone_recurring` | Rain before the log time; normal congestion along the backup and approach zones |
+| `int_incident_lane_closures` | Closures in place at the incident's place and time (null before collection started) |
+| `int_incident_live_speed` | Speed when the incident was reported, only if the lookup landed on the right carriageway |
+| `int_incident_calendar` | Holidays, long weekends, getaway days, winter break, clock changes (seed `calendar_days`), darkness and sun glare (sun position computed in SQL) |
 | `fct_incident_backup` | **The label**: whether each incident caused a backup, start/end, duration, censoring, how far back it reached |
 | `fct_training_landmarks` | **The training set**: one row per incident at 5, 10, 20 and 30 min after the log time, with everything known at that moment and the minutes left until traffic is normal |
 

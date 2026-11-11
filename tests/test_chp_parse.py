@@ -161,9 +161,17 @@ def test_cut_off_download_is_retried_and_then_accepted(monkeypatch):
         def raise_for_status(self):
             pass
 
-    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: Resp(bodies.pop(0)))
+    calls = []
+
+    def get(url, **kw):
+        calls.append(kw)
+        return Resp(bodies.pop(0))
+
+    monkeypatch.setattr(fetch.requests, "get", get)
     monkeypatch.setattr(fetch.time, "sleep", lambda s: None)
     assert fetch.get_feed("http://x") == good
+    assert calls[0]["params"] is None and "_" in calls[1]["params"]  # the retry asks for an uncached copy
+    assert calls[1]["headers"]["Cache-Control"] == "no-cache"
 
 
 def test_feed_that_stays_cut_off_raises(monkeypatch):
@@ -180,5 +188,35 @@ def test_feed_that_stays_cut_off_raises(monkeypatch):
 
     monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: Resp())
     monkeypatch.setattr(fetch.time, "sleep", lambda s: None)
+    monkeypatch.setattr(fetch, "_failed_polls", 0)
     with pytest.raises(fetch.FeedError, match="incomplete XML"):
+        fetch.get_feed("http://x")
+
+
+def test_container_stuck_on_a_bad_copy_exits_so_lambda_replaces_it(monkeypatch):
+    import pytest
+
+    from chp import fetch
+
+    class Resp:
+        status_code = 200
+        content = b"<State><Center>"
+
+        def raise_for_status(self):
+            pass
+
+    class Exited(Exception):
+        pass
+
+    def exit_(code):
+        raise Exited(code)
+
+    monkeypatch.setattr(fetch.requests, "get", lambda url, **kw: Resp())
+    monkeypatch.setattr(fetch.time, "sleep", lambda s: None)
+    monkeypatch.setattr(fetch.os, "_exit", exit_)
+    monkeypatch.setattr(fetch, "_failed_polls", 0)
+    for _ in range(fetch.RECYCLE_AFTER - 1):  # a few failed polls: just errors, the alarm counts them
+        with pytest.raises(fetch.FeedError):
+            fetch.get_feed("http://x")
+    with pytest.raises(Exited):               # the next one replaces the container
         fetch.get_feed("http://x")

@@ -21,7 +21,7 @@ models:
                 values: [N, S, E, W]
 
   - name: stg_chp_notes
-    description: Every dispatcher note per incident, with the time the poller first saw it.
+    description: Every dispatcher note per incident, with the time the poller first saw it (history notes - the time PeMS gives plus 3 minutes).
     columns:
       - name: log_id
         tests:
@@ -54,6 +54,24 @@ models:
   - name: stg_pems_5min
     description: 5-minute mainline readings with an is_observed quality flag (view).
 
+  - name: stg_lane_closures
+    description: One row per Caltrans lane closure, combined across the days it was listed, with when it was really in place.
+    columns:
+      - name: closure_key
+        tests: [not_null, unique]
+
+  - name: stg_tomtom_flow
+    description: First live speed lookup per incident.
+    columns:
+      - name: log_id
+        tests: [not_null, unique]
+
+  - name: stg_road_layout
+    description: OpenStreetMap road layout per incident.
+    columns:
+      - name: log_id
+        tests: [not_null, unique]
+
 unit_tests:
   - name: chp_incidents_direction_and_closures
     model: stg_chp_incidents
@@ -61,6 +79,10 @@ unit_tests:
       u101: CHP says "US101 E" in the Valley; PeMS calls that direction S.
       back: dropped out of the feed (closure recorded at 15:10) but came back at 15:20 -> still open.
       gone: closed for real at 15:30, after its last version.
+      History (PeMS's record) fills district-hours with no live incident: 1 is kept (before the poller
+      started); 5 is kept (a later hour with nothing live, as during an outage); 2 is in an hour the
+      poller covered in that district (the live copies win); 3 is in Sacramento, which the poller
+      doesn't cover; 4 has no duration (still open in CHP's record) and is left out.
     given:
       - input: source('bronze', 'chp_incidents')
         rows:
@@ -78,8 +100,64 @@ unit_tests:
       - input: ref('stg_pems_pairing')
         rows:
           - {district: "07", day: "2026-10-01", status: paired}
+          - {district: "07", day: "2026-09-20", status: paired}
+      - input: source('bronze', 'hist_chp_incidents')
+        rows:
+          - {incident_id: "1", cc_code: LAHB, log_time: "2026-09-20 15:00:00", log_type_code: "1183", description: "1183-Trfc Collision-Unkn Inj", location: "I405 N / Sunset Blvd", area: null, lat: 34.07, lon: -118.47, district: 7, freeway: 405, direction: N, duration_min: 30.0, dt: "2026-09-20"}
+          - {incident_id: "2", cc_code: LAHB, log_time: "2026-10-01 15:30:00", log_type_code: "1183", description: "1183-Trfc Collision-Unkn Inj", location: "I405 N / Sunset Blvd", area: null, lat: 34.07, lon: -118.47, district: 7, freeway: 405, direction: N, duration_min: 30.0, dt: "2026-10-01"}
+          - {incident_id: "3", cc_code: SAHB, log_time: "2026-09-20 15:10:00", log_type_code: "1183", description: "1183-Trfc Collision-Unkn Inj", location: "I5 N / J St", area: null, lat: 38.58, lon: -121.5, district: 3, freeway: 5, direction: N, duration_min: 30.0, dt: "2026-09-20"}
+          - {incident_id: "5", cc_code: LAHB, log_time: "2026-10-01 18:00:00", log_type_code: "1183", description: "1183-Trfc Collision-Unkn Inj", location: "I405 N / Sunset Blvd", area: null, lat: 34.07, lon: -118.47, district: 7, freeway: 405, direction: N, duration_min: 30.0, dt: "2026-10-01"}
+          - {incident_id: "4", cc_code: LAHB, log_time: "2026-09-20 15:20:00", log_type_code: "1182", description: "1182-Trfc Collision-No Inj", location: "US101 W / Topanga", area: null, lat: 34.17, lon: -118.6, district: 7, freeway: 101, direction: W, duration_min: null, dt: "2026-09-20"}
     expect:
       rows:
-        - {log_id: u101, freeway: 101, direction: S, is_closed: false, pairing_status: paired}
-        - {log_id: back, freeway: 405, direction: N, is_closed: false, pairing_status: paired}
-        - {log_id: gone, freeway: 91, direction: W, is_closed: true, pairing_status: paired}
+        - {log_id: u101, freeway: 101, direction: S, is_closed: false, pairing_status: paired, source: live}
+        - {log_id: back, freeway: 405, direction: N, is_closed: false, pairing_status: paired, source: live}
+        - {log_id: gone, freeway: 91, direction: W, is_closed: true, pairing_status: paired, source: live}
+        - {log_id: H1, freeway: 405, direction: N, is_closed: true, pairing_status: paired, source: history}
+        - {log_id: H5, freeway: 405, direction: N, is_closed: true, pairing_status: paired, source: history}
+
+  - name: lane_closures_combined_across_days
+    model: stg_lane_closures
+    description: >
+      k1 listed on two days, crew reported it over at 03:00 -> ends then. k2 dropped out of the feed at
+      12:00 without an end report -> over by then. k3 still listed in the latest feed -> in place up to
+      that time. Route and direction are reduced to 405 / N; "2 Lanes" to 2.
+    given:
+      - input: source('bronze', 'caltrans_lane_closures')
+        rows:
+          - {closure_key: k1, route: I-405, direction: North, begin_lat: 34.0, begin_lon: -118.4, end_lat: 34.02, end_lon: -118.4, lanes_closed: "2 Lanes", started_at: "2026-10-01 10:00:00", ended_at: null, first_seen: "2026-10-01 09:00:00", last_seen: "2026-10-01 23:55:00", dt: "2026-10-01"}
+          - {closure_key: k1, route: I-405, direction: North, begin_lat: 34.0, begin_lon: -118.4, end_lat: 34.02, end_lon: -118.4, lanes_closed: "2 Lanes", started_at: "2026-10-01 10:00:00", ended_at: "2026-10-02 03:00:00", first_seen: "2026-10-02 00:00:00", last_seen: "2026-10-02 03:05:00", dt: "2026-10-02"}
+          - {closure_key: k2, route: SR-91, direction: West, begin_lat: 33.9, begin_lon: -117.8, end_lat: null, end_lon: null, lanes_closed: "1", started_at: "2026-10-01 10:00:00", ended_at: null, first_seen: "2026-10-01 09:00:00", last_seen: "2026-10-01 12:00:00", dt: "2026-10-01"}
+          - {closure_key: k3, route: US-101, direction: Both, begin_lat: 34.1, begin_lon: -118.3, end_lat: 34.1, end_lon: -118.31, lanes_closed: "1", started_at: "2026-10-01 22:00:00", ended_at: null, first_seen: "2026-10-01 21:00:00", last_seen: "2026-10-02 06:00:00", dt: "2026-10-02"}
+    expect:
+      rows:
+        - {closure_key: k1, route_number: 405, direction_letter: N, lanes_closed: 2, active_to: "2026-10-02 03:00:00", end_lat: 34.02}
+        - {closure_key: k2, route_number: 91,  direction_letter: W, lanes_closed: 1, active_to: "2026-10-01 12:00:00", end_lat: 33.9}
+        - {closure_key: k3, route_number: 101, direction_letter: B, lanes_closed: 1, active_to: "2026-10-02 06:00:00", end_lat: 34.1}
+
+  - name: history_notes_cleaned_and_delayed
+    model: stg_chp_notes
+    description: >
+      A history note keeps CHP's note number, loses its "[Appended ...]" marker and "[Shared]" tag, and
+      counts as seen 3 minutes after its posting time. Unit events and notes of incidents not kept
+      (H9 is not in the incidents table) are left out.
+    given:
+      - input: source('bronze', 'chp_details')
+        rows:
+          - {log_id: L1, detail_seq: 1, detail_time: "2026-10-01 15:00:00", detail_text: "TC", polled_at: "2026-10-01 15:01:00"}
+      - input: source('bronze', 'chp_incidents')
+        rows:
+          - {log_id: L1, polled_at: "2026-10-01 15:01:00"}
+      - input: ref('stg_chp_incidents')
+        rows:
+          - {log_id: H1, source: history}
+          - {log_id: L1, source: live}
+      - input: source('bronze', 'hist_chp_details')
+        rows:
+          - {incident_id: "1", detail_time: "2026-09-20 15:04:00", seen_at: "2026-09-20 15:05:09", detail_text: "[5] [Appended  08:05:09] [1] 2 VEHS BLKG #1 LN  [Shared]"}
+          - {incident_id: "1", detail_time: "2026-09-20 15:15:00", seen_at: "2026-09-20 15:15:00", detail_text: "Unit At Scene"}
+          - {incident_id: "9", detail_time: "2026-09-20 15:15:00", seen_at: "2026-09-20 15:15:00", detail_text: "[1] OTHER"}
+    expect:
+      rows:
+        - {log_id: L1, detail_seq: 1, first_seen_at: "2026-10-01 15:01:00", detail_text: "TC"}
+        - {log_id: H1, detail_seq: 5, first_seen_at: "2026-09-20 15:08:09", detail_text: "2 VEHS BLKG #1 LN"}

@@ -19,6 +19,7 @@ vars:
   series_before_minutes: 60  # traffic history kept before the log time
   series_after_minutes: 180  # traffic kept after the log time
   min_profile_days: 3        # other days needed to trust a sensor's "typical" traffic for a time slot
+  profile_window_days: 42    # "typical" only uses days within 6 weeks of the incident (same season)
   # Backup label (see int_backup_slots and fct_incident_backup)
   slow_ratio: 0.6            # a sensor is backed up when speed < this x expected speed
   recover_ratio: 0.8         # ...and has recovered only once speed is back above this x expected

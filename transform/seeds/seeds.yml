@@ -4,3 +4,15 @@ seeds:
     description: Caltrans district each CHP dispatch center mostly covers (matches src/common/config.py).
     config:
       column_types: {dispatch_id: varchar, district: varchar}
+  - name: calendar_days
+    description: >
+      Days that don't behave like a normal weekday or weekend, 2026-2027 (extend each December).
+      kind: holiday (federal and California, observed dates too), long_weekend (the days of a 3- or
+      4-day holiday weekend), getaway_day (the last workday before one), winter_break (Dec 21 - Jan 3),
+      dst_week (the day the clocks change and the week after), special_day (Halloween, Christmas Eve,
+      New Year's Eve). A day can have several kinds.
+    config:
+      column_types: {day: date, name: varchar, kind: varchar}
+  - name: holidays                  # replaced by calendar_days; off in case an old copy of the file is still there
+    config:
+      enabled: false
